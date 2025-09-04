@@ -20,7 +20,7 @@ public class CozinhaImpl extends UnicastRemoteObject implements Cozinha {
         int segundo_atual = LocalTime.now().getSecond();
         Preparo preparo = new Preparo(comanda, tempo_preparo, segundo_atual, pedidos);
         preparos.add(preparo);
-        return preparos.size();
+        return preparos.size() - 1;
     }
     @Override
     public int tempoPreparo(int preparo_idx) throws RemoteException {

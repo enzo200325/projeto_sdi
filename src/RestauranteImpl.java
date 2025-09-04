@@ -10,6 +10,8 @@ import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
 import java.rmi.server.UnicastRemoteObject;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Scanner;
 
 public class RestauranteImpl extends UnicastRemoteObject implements Restaurante {
@@ -17,6 +19,7 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
     Cozinha cozinha;
     String[] cardapio;
     ArrayList<Comanda> comandas;
+    Map<Integer, Integer> mapaPedidos;
 
     protected RestauranteImpl() throws RemoteException, NotBoundException {
         super();
@@ -24,16 +27,12 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
         cozinha = (Cozinha) registry.lookup("ServerCozinha");
         cardapio = buildCardapio();
         comandas = new ArrayList<>();
+        mapaPedidos = new HashMap<>();
     }
 
-    public Prato csvToPrato(String prato_str) {
-        String[] campos = prato_str.split(",");
-        Prato prato = new Prato(campos[1], Integer.parseInt(campos[0]), Double.parseDouble(campos[2]));
-        return prato;
-    }
     public String[] buildCardapio (){
         int idx = 0; cardapio = new String[100];
-        try (Scanner scanner = new Scanner (new File("Cardapio/menu_restaurante.csv"))){
+        try (Scanner scanner = new Scanner (new File("src/Cardapio/menu_restaurante.csv"))){
             scanner.nextLine();
             while(scanner.hasNextLine()){
                 String linha = scanner.nextLine();
@@ -59,10 +58,13 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
     @Override
     public String fazerPedido(int comanda, String[] pedidos) throws RemoteException {
         for (String pedido : pedidos) {
-            Prato prato = csvToPrato(pedido);
+            Prato prato = new Prato(pedido);
             comandas.get(comanda).addPedido(prato);
         }
         int preparo_id = cozinha.novoPreparo(comanda, pedidos);
+
+        mapaPedidos.put(comanda, preparo_id);
+
         return null;
     }
     @Override
@@ -75,6 +77,10 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
     }
     @Override
     public boolean fecharComanda(int comanda) throws RemoteException {
-        return false;
+        int preparoId = mapaPedidos.get(comanda);
+        if(cozinha.tempoPreparo(preparoId) == 0) {
+            mapaPedidos.remove(preparoId);
+            return true;
+        } else return false;
     }
 }

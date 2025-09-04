@@ -1,5 +1,7 @@
 package Interfaces;
 
+import Cardapio.Prato;
+
 import java.rmi.*;
 /*
  * CSV (int,string,float):
@@ -19,4 +21,5 @@ public interface Restaurante extends Remote {
     public float valorComanda(int comanda) throws RemoteException;
     /* Realiza o pagamento e libera */
     public boolean fecharComanda(int comanda) throws RemoteException;
+
 }
