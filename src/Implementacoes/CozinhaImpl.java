@@ -1,3 +1,6 @@
+package Implementacoes;
+
+import Classes.Preparo;
 import Interfaces.Cozinha;
 
 import java.rmi.RemoteException;
@@ -9,7 +12,7 @@ import java.lang.Math;
 
 public class CozinhaImpl extends UnicastRemoteObject implements Cozinha {
     ArrayList<Preparo> preparos;
-    protected CozinhaImpl() throws RemoteException {
+    public CozinhaImpl() throws RemoteException {
         super();
         preparos = new ArrayList<>();
     }

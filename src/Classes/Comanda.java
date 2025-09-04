@@ -1,12 +1,13 @@
-import Cardapio.Prato;
+package Classes;
 
 import java.util.ArrayList;
 
 public class Comanda {
     String nome;
     int mesa;
-    ArrayList<Prato> pedidos;
-    Comanda(String nome, int mesa) {
+    public ArrayList<Prato> pedidos;
+
+    public Comanda(String nome, int mesa) {
         this.nome = nome;
         this.mesa = mesa;
         this.pedidos = new ArrayList<>();

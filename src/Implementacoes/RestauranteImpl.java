@@ -1,4 +1,7 @@
-import Cardapio.Prato;
+package Implementacoes;
+
+import Classes.Prato;
+import Classes.Comanda;
 import Interfaces.Cozinha;
 import Interfaces.Restaurante;
 
@@ -21,7 +24,7 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
     ArrayList<Comanda> comandas;
     Map<Integer, Integer> mapaPedidos;
 
-    protected RestauranteImpl() throws RemoteException, NotBoundException {
+    public RestauranteImpl() throws RemoteException, NotBoundException {
         super();
         registry = LocateRegistry.getRegistry("localhost");
         cozinha = (Cozinha) registry.lookup("ServerCozinha");

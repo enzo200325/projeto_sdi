@@ -1,4 +1,4 @@
-package Cardapio;
+package Classes;
 
 public class Prato {
     public String nome;

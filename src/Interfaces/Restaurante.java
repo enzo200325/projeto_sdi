@@ -1,7 +1,5 @@
 package Interfaces;
 
-import Cardapio.Prato;
-
 import java.rmi.*;
 /*
  * CSV (int,string,float):

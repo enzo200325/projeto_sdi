@@ -1,4 +1,4 @@
-import Cardapio.Prato;
+import Classes.Prato;
 import Interfaces.Restaurante;
 
 import java.rmi.RemoteException;
