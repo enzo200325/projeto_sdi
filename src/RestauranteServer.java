@@ -3,14 +3,9 @@ import java.rmi.registry.Registry;
 
 public class RestauranteServer {
     public static void main(String[] args) throws Exception {
-        Registry registry = LocateRegistry.createRegistry(1099);
-
-        CozinhaImpl cozinha = new CozinhaImpl();
-        registry.rebind("ServerCozinha", cozinha);
-
+        Registry registry = LocateRegistry.getRegistry("localhost");
         RestauranteImpl restaurante = new RestauranteImpl();
         registry.rebind("ServerRestaurante", restaurante);
-
         System.out.println("Servers iniciado com sucesso");
     }
 }
