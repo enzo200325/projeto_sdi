@@ -1,5 +1,5 @@
-import Classes.Prato;
-import Interfaces.Restaurante;
+import classes.Prato;
+import interfaces.Restaurante;
 
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;

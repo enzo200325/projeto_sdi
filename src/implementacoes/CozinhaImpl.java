@@ -1,17 +1,18 @@
-package Implementacoes;
+package implementacoes;
 
-import Classes.Preparo;
-import Interfaces.Cozinha;
+import classes.Preparo;
+import interfaces.Cozinha;
 
 import java.rmi.RemoteException;
 import java.rmi.server.UnicastRemoteObject;
 import java.time.LocalTime;
 import java.util.ArrayList;
-import java.util.random.RandomGenerator;
+import java.util.Random;
 import java.lang.Math;
 
 public class CozinhaImpl extends UnicastRemoteObject implements Cozinha {
     ArrayList<Preparo> preparos;
+    Random r = new Random();
     public CozinhaImpl() throws RemoteException {
         super();
         preparos = new ArrayList<>();
@@ -19,7 +20,7 @@ public class CozinhaImpl extends UnicastRemoteObject implements Cozinha {
 
     @Override
     public int novoPreparo(int comanda, String[] pedidos) throws RemoteException {
-        int tempo_preparo = RandomGenerator.getDefault().nextInt(1, 10);
+        int tempo_preparo = r.nextInt(9) + 1;
         int segundo_atual = LocalTime.now().getSecond();
         Preparo preparo = new Preparo(comanda, tempo_preparo, segundo_atual, pedidos);
         preparos.add(preparo);

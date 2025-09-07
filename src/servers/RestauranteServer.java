@@ -1,6 +1,6 @@
-package Servers;
+package servers;
 
-import Implementacoes.RestauranteImpl;
+import implementacoes.RestauranteImpl;
 
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;

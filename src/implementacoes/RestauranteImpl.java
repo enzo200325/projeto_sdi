@@ -1,9 +1,9 @@
-package Implementacoes;
+package implementacoes;
 
-import Classes.Prato;
-import Classes.Comanda;
-import Interfaces.Cozinha;
-import Interfaces.Restaurante;
+import classes.Prato;
+import classes.Comanda;
+import interfaces.Cozinha;
+import interfaces.Restaurante;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -28,6 +28,9 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
         super();
         registry = LocateRegistry.getRegistry("localhost");
         cozinha = (Cozinha) registry.lookup("ServerCozinha");
+
+
+
         cardapio = buildCardapio();
         comandas = new ArrayList<>();
         mapaPedidos = new HashMap<>();

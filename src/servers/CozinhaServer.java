@@ -1,6 +1,6 @@
-package Servers;
+package servers;
 
-import Implementacoes.CozinhaImpl;
+import implementacoes.CozinhaImpl;
 
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
