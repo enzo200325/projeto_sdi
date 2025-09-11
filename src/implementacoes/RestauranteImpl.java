@@ -1,5 +1,6 @@
 package implementacoes;
 
+import classes.Pedido;
 import classes.Prato;
 import classes.Comanda;
 import interfaces.Cozinha;
@@ -7,6 +8,7 @@ import interfaces.Restaurante;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.net.MalformedURLException;
 import java.rmi.NotBoundException;
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
@@ -17,23 +19,42 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Scanner;
 
+import javax.xml.namespace.QName;
+import javax.xml.ws.Service;
+import java.net.URL;
+import interfaces.MercadoServidor;
+
 public class RestauranteImpl extends UnicastRemoteObject implements Restaurante {
     Registry registry;
     Cozinha cozinha;
     String[] cardapio;
     ArrayList<Comanda> comandas;
     Map<Integer, Integer> mapaPedidos;
+    Map<String, Integer> mapaEstoque;
 
-    public RestauranteImpl() throws RemoteException, NotBoundException {
+    ArrayList<Integer> id_pedidos;
+
+    URL url;
+    QName qname;
+    Service service;
+    MercadoServidor mercado;
+
+    public RestauranteImpl() throws RemoteException, NotBoundException, MalformedURLException {
         super();
         registry = LocateRegistry.getRegistry("localhost");
         cozinha = (Cozinha) registry.lookup("ServerCozinha");
 
+        url = new URL("http://127.0.0.1:9876/mercado?wsdl");
+        qname = new QName("http://implementacoes/", "MercadoServidorImplService");
+        service = Service.create(url, qname);
 
-
+        mapaEstoque = new HashMap<>();
         cardapio = buildCardapio();
         comandas = new ArrayList<>();
         mapaPedidos = new HashMap<>();
+        mercado = new MercadoServidorImpl();
+
+        id_pedidos = new ArrayList<>();
     }
 
     public String[] buildCardapio (){
@@ -43,6 +64,11 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
             while(scanner.hasNextLine()){
                 String linha = scanner.nextLine();
                 cardapio[idx] = linha;
+                String[] partes = linha.split(",");
+                String nomePrato = partes[1].trim();
+
+                // tudo começa com 3 no estoque
+                mapaEstoque.put(nomePrato, 3);
                 idx++;
             }
         } catch (FileNotFoundException e) {
@@ -63,15 +89,43 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
     }
     @Override
     public String fazerPedido(int comanda, String[] pedidos) throws RemoteException {
+        ArrayList<String> nao_temos = new ArrayList<>();
+        ArrayList<Prato> para_pedir =  new ArrayList<>();
         for (String pedido : pedidos) {
             Prato prato = new Prato(pedido);
-            comandas.get(comanda).addPedido(prato);
+            if (mapaEstoque.get(prato.nome) == null){
+                nao_temos.add(prato.nome);
+            }
+            else {
+                if (mapaEstoque.get(prato.nome) <= 0){
+                    nao_temos.add(prato.nome);
+                }
+            }
+            para_pedir.add(prato);
         }
-        int preparo_id = cozinha.novoPreparo(comanda, pedidos);
+        if (nao_temos.isEmpty()) {
+            for (Prato prato : para_pedir) {
+                comandas.get(comanda).addPedido(prato);
+                mapaEstoque.compute(prato.nome, (k, qtdAtual) -> qtdAtual - 1);
+            }
+            int preparo_id = cozinha.novoPreparo(comanda, pedidos);
+            mapaPedidos.put(comanda, preparo_id);
 
-        mapaPedidos.put(comanda, preparo_id);
+            return "Pedido feito, por favor aguarde";
+        }
+        else {
+            String mostrar = "Estamos sem ";
+            id_pedidos.add(mercado.cadastrarPedido("Pedido" + id_pedidos.size()));
+            String[] to_array = nao_temos.toArray(new String[0]);
+            mercado.comprarProdutos(id_pedidos.get(id_pedidos.size() - 1), to_array);
 
-        return null;
+            for (String falta : nao_temos) {
+                mostrar += falta;
+                mostrar += ", ";
+            }
+            return mostrar;
+
+        }
     }
     @Override
     public float valorComanda(int comanda) throws RemoteException {

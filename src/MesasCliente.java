@@ -55,7 +55,7 @@ public class MesasCliente {
         int left_it = 0;
         while (left_it<cardapio.length){
             for (int i = left_it; i < Math.min(left_it + 20, cardapio.length); i++){
-                System.out.println(cardapio[i]);
+                //System.out.println(cardapio[i]);
                 Prato prato = new Prato(cardapio[i]);
                 System.out.println(prato.idx + " - " + prato.nome + ": " +  prato.valor);
             }
@@ -100,8 +100,8 @@ public class MesasCliente {
             idx++;
         }
 
-        restaurante.fazerPedido(op - 1, pedidos);
-        System.out.println("Pedidos enviados.");
+        String retorno = restaurante.fazerPedido(op - 1, pedidos);
+        System.out.println(retorno);
     }
 
     public static boolean fecharComanda() throws RemoteException{
