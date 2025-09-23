@@ -44,22 +44,22 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
         registry = LocateRegistry.getRegistry("localhost");
         cozinha = (Cozinha) registry.lookup("ServerCozinha");
 
-        url = new URL("http://127.0.0.1:9876/mercado?wsdl");
-        qname = new QName("http://implementacoes/", "MercadoServidorImplService");
+        url = new URL("http://127.0.0.1:9000/mercado?wsdl");
+        qname = new QName("http://demo.example.com/", "MercadoServidorImplService");
         service = Service.create(url, qname);
 
         mapaEstoque = new HashMap<>();
         cardapio = buildCardapio();
         comandas = new ArrayList<>();
         mapaPedidos = new HashMap<>();
-        mercado = new MercadoServidorImpl();
+        mercado = service.getPort(MercadoServidor.class);
 
         id_pedidos = new ArrayList<>();
     }
 
     public String[] buildCardapio (){
         int idx = 0; cardapio = new String[100];
-        try (Scanner scanner = new Scanner (new File("src/Cardapio/menu_restaurante.csv"))){
+        try (Scanner scanner = new Scanner (new File("cardapio/menu_restaurante.csv"))){
             scanner.nextLine();
             while(scanner.hasNextLine()){
                 String linha = scanner.nextLine();

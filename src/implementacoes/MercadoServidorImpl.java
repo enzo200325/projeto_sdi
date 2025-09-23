@@ -26,6 +26,7 @@ public class MercadoServidorImpl implements MercadoServidor {
         // Isso é bomba, mas é só pra deixa um placeholder para uma suposta lógica
        // else pedidos.get(restaurante).add(produtos);
 
+
         Pedido pedido = new Pedido(produtos);
         restaurantesClientes.get(restaurante).add(pedido);
         return true;
