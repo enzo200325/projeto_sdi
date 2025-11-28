@@ -44,8 +44,8 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
         registry = LocateRegistry.getRegistry("localhost");
         cozinha = (Cozinha) registry.lookup("ServerCozinha");
 
-        url = new URL("http://127.0.0.1:9000/mercado?wsdl");
-        qname = new QName("http://demo.example.com/", "MercadoServidorImplService");
+        url = new URL("http://127.0.0.1:9876/mercado?wsdl");
+        qname = new QName("http://implementacoes/", "MercadoServidorImplService");
         service = Service.create(url, qname);
 
         mapaEstoque = new HashMap<>();

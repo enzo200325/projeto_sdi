@@ -12,10 +12,11 @@ import java.lang.Math;
 
 public class CozinhaImpl extends UnicastRemoteObject implements Cozinha {
     ArrayList<Preparo> preparos;
-    Random r = new Random();
+    Random r;
     public CozinhaImpl() throws RemoteException {
         super();
         preparos = new ArrayList<>();
+        r = new Random();
     }
 
     @Override
