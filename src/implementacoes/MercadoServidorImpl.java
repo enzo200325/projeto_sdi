@@ -1,12 +1,19 @@
 package implementacoes;
 
 import classes.Pedido;
+import interfaces.Filial;
 import interfaces.MercadoServidor;
 import javax.jws.WebService;
+import javax.xml.namespace.QName;
 import javax.xml.ws.Endpoint;
+import javax.xml.ws.Service;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.rmi.RemoteException;
 import java.time.LocalTime;
 import java.util.*;
+
+import static java.util.List.*;
 
 @WebService(
         endpointInterface = "interfaces.MercadoServidor" // ,
@@ -16,8 +23,9 @@ public class MercadoServidorImpl implements MercadoServidor {
     private Map<Integer, List<Pedido>> restaurantesClientes;
     private Map<Integer, String> idToRestaurantes;
     private Random r;
-    private int lider_idx;
+    //private int lider_idx;
 
+    private String urlLider;
     private ArrayList<String> urls_filiais;
     String my_url;
 
@@ -26,19 +34,18 @@ public class MercadoServidorImpl implements MercadoServidor {
         idToRestaurantes = new HashMap<>();
         r =  new Random();
         my_url = url;
-        urls_filiais = new ArrayList<>();
-        urls_filiais.add("http://127.0.0.1:9876/filial");
-        urls_filiais.add("http://127.0.0.1:9875/filial");
-        urls_filiais.add("http://127.0.0.1:9874/filial");
-
-        for (int i = 0; i < urls_filiais.size(); i++) {
-            String cur_url = urls_filiais.get(i);
-            String nxt_url = urls_filiais.get((i + 1)%urls_filiais.size());
-            Endpoint.publish(cur_url, new FilialImpl(cur_url, nxt_url, my_url, i));
-        }
-        this.lider_idx = 0; // temporario
     }
 
+    private Filial getFilial(String url){
+        try {
+            URL wsdl = new URL(url + "?wsdl");
+            QName qname = new QName("http://implementacoes/", "FilialImplService");
+            Service service = Service.create(wsdl, qname);
+            return service.getPort(Filial.class);
+        } catch (MalformedURLException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
     private int codigosPedidos = 0;
 
