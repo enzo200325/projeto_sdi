@@ -9,12 +9,9 @@ import java.net.MalformedURLException;
 @SOAPBinding(style = SOAPBinding.Style.RPC)
 public interface Filial {
     @WebMethod
-    public int get_id();
+    public int getId();
     @WebMethod
-    public void set_id(int id);
+    public void election(int idCandidate, int idOrigem) throws MalformedURLException;
     @WebMethod
-    public void election(int idCandidate) throws MalformedURLException;
-    @WebMethod
-    public void announceLeader(int idLeader);
-
+    public void announceLeader(int idLeader, int idOrigem);
 }

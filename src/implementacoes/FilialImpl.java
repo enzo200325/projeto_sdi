@@ -5,83 +5,81 @@ import interfaces.Filial;
 
 import javax.jws.WebMethod;
 import javax.jws.WebService;
-import javax.xml.namespace.QName;
-import javax.xml.ws.Service;
 import java.net.MalformedURLException;
-import java.net.URL;
-import java.time.LocalTime;
 import java.util.*;
 
 @WebService(
-        endpointInterface = "interfaces.Filial" // ,
-        // targetNamespace = "implementacoes"
+        endpointInterface = "interfaces.Filial"
 )
 public class FilialImpl implements Filial{
     Random r;
-    int id, id_lider = -1;
-    String my_url, adj_url, interface_url;
+    int id, id_lider, id_origem;
+    String my_url;
 
+    private Filial next;
     private boolean emEleicao;
 
-    public FilialImpl(String my_url, String adj_url, int id) {
+    public FilialImpl(String my_url) {
         this.r = new Random();
-        this.id = id;
+        this.id = r.nextInt(2000);
+        this.id_lider = -1;
         this.my_url = my_url;
-        this.adj_url = adj_url;
         this.emEleicao = false;
     }
 
     @WebMethod
-    public int get_id() {
+    public int getId() {
         return this.id;
     }
 
-    @WebMethod
-    public void set_id(int id) {
-        this.id = id;
+    public int getLider() {
+        return this.id_lider;
     }
 
     @WebMethod
-    public synchronized void election(int idC) throws MalformedURLException {
+    public  void election(int idC, int idOrigem) throws MalformedURLException {
+        this.id_origem = idOrigem;
+        emEleicao = true;
 
+        System.out.println("FILIAL ATUAL: " + this.id);
+        System.out.println("NEXT " + next.getId());
         System.out.println("Filial " + this.id + " recebeu election(" + idC + ")");
 
         int maior = Math.max(idC, this.id);
 
-        // Fechamento do anel:
-        if (getNext().get_id() == idC) {
+        if (next.getId() == idOrigem) {
             System.out.println("Filial " + this.id + " detectou fim do anel. Líder = " + maior);
-            getNext().announceLeader(maior);
-            return;
+           try {
+                next.announceLeader(maior, this.id);
+                emEleicao = false;
+                return;
+           }catch (Exception e) {
+               e.printStackTrace();
+           }
+           return;
         }
-
-        getNext().election(maior);
+        next.election(maior, idOrigem);
     }
 
     @WebMethod
-    public synchronized void announceLeader (int id) {
-        this.id_lider = id;
-
-        System.out.println(this.id);
-        if(this.id == id) {
+    public  void announceLeader (int idLider, int idOrigem) {
+        this.id_lider = idLider;
+        emEleicao = false;
+        if(this.id == idOrigem) {
             System.out.println("Divulgação do líder com sucesso.\n");
             return;
         }
-        System.out.println("Filial " + this.id + " registrou a líder " + id + " .\n");
 
+        System.out.println("Filial " + this.id + " recebeu que líder é " + idLider);
         try{
-            getNext().announceLeader(id);
+            next.announceLeader(idLider, idOrigem);
         } catch (Exception e){
             e.printStackTrace();
         }
     }
 
-    private Filial getNext() throws MalformedURLException {
-        URL wsdl = new URL(adj_url + "?wsdl");
-        QName qname = new QName("http://implementacoes/", "FilialImplService");
-        Service service = Service.create(wsdl, qname);
-        return service.getPort(Filial.class);
+    public void setNext(Filial next) {
+        this.next = next;
     }
-
 
 }
