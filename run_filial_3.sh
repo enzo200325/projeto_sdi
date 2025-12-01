@@ -16,3 +16,4 @@ echo "Iniciando Filial 3 (porta 9874)..."
 java -cp "$CLASSPATH" servers.FilialServidorPublisher 9874
 
 
+
