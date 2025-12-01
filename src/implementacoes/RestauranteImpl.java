@@ -44,7 +44,7 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
         registry = LocateRegistry.getRegistry("localhost");
         cozinha = (Cozinha) registry.lookup("ServerCozinha");
 
-        url = new URL("http://127.0.0.1:9876/mercado?wsdl");
+        url = new URL("http://127.0.0.1:9000/mercado?wsdl");
         qname = new QName("http://implementacoes/", "MercadoServidorImplService");
         service = Service.create(url, qname);
 
@@ -59,7 +59,7 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
 
     public String[] buildCardapio (){
         int idx = 0; cardapio = new String[100];
-        try (Scanner scanner = new Scanner (new File("cardapio/menu_restaurante.csv"))){
+        try (Scanner scanner = new Scanner (new File("src/cardapio/menu_restaurante.csv"))){
             scanner.nextLine();
             while(scanner.hasNextLine()){
                 String linha = scanner.nextLine();
@@ -104,6 +104,7 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
             para_pedir.add(prato);
         }
         if (nao_temos.isEmpty()) {
+            // Temos tudo em estoque, processa normalmente
             for (Prato prato : para_pedir) {
                 comandas.get(comanda).addPedido(prato);
                 mapaEstoque.compute(prato.nome, (k, qtdAtual) -> qtdAtual - 1);
@@ -114,19 +115,38 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
             return "Pedido feito, por favor aguarde";
         }
         else {
+            // Não temos estoque, pede ao mercado (que coordena com as filiais)
             String mostrar = "Estamos sem ";
-            id_pedidos.add(mercado.cadastrarPedido("Pedido" + id_pedidos.size()));
-            String[] to_array = nao_temos.toArray(new String[0]);
-            mercado.comprarProdutos(id_pedidos.get(id_pedidos.size() - 1), to_array);
-
-            for (String falta : nao_temos) {
-                mostrar += falta;
-                mostrar += ", ";
+            int pedidoId = mercado.cadastrarPedido("Restaurante");
+            boolean sucesso = mercado.comprarProdutos(pedidoId, nao_temos.toArray(new String[0]));
+            
+            if (sucesso) {
+                // Mercado conseguiu atender (via filiais), adiciona ao estoque e processa
+                for (String produto : nao_temos) {
+                    mapaEstoque.put(produto, mapaEstoque.getOrDefault(produto, 0) + 1);
+                }
+                
+                // Processa todos os pedidos
+                for (Prato prato : para_pedir) {
+                    comandas.get(comanda).addPedido(prato);
+                    mapaEstoque.compute(prato.nome, (k, qtdAtual) -> qtdAtual - 1);
+                }
+                int preparo_id = cozinha.novoPreparo(comanda, pedidos);
+                mapaPedidos.put(comanda, preparo_id);
+                
+                return "Pedido feito com produtos do mercado (filiais), por favor aguarde";
+            } else {
+                // Mercado não conseguiu atender
+                for (String falta : nao_temos) {
+                    mostrar += falta;
+                    mostrar += ", ";
+                }
+                mostrar += " (mercado não conseguiu atender)";
+                return mostrar;
             }
-            return mostrar;
-
         }
     }
+    
     @Override
     public float valorComanda(int comanda) throws RemoteException {
         float valor = 0;
@@ -137,10 +157,19 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
     }
     @Override
     public boolean fecharComanda(int comanda) throws RemoteException {
-        int preparoId = mapaPedidos.get(comanda);
-        if(cozinha.tempoPreparo(preparoId) == 0) {
-            mapaPedidos.remove(preparoId);
+        Integer preparoId = mapaPedidos.get(comanda);
+        
+        // Se não há pedido associado à comanda, pode fechar (comanda vazia ou pedido falhou)
+        if (preparoId == null) {
+            System.out.println("Comanda " + comanda + " não tem pedidos em preparo. Pode fechar.");
             return true;
-        } else return false;
+        }
+        
+        if(cozinha.tempoPreparo(preparoId) == 0) {
+            mapaPedidos.remove(comanda);
+            return true;
+        } else {
+            return false;
+        }
     }
 }
