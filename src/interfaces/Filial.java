@@ -8,20 +8,31 @@ import java.net.MalformedURLException;
 @WebService
 @SOAPBinding(style = SOAPBinding.Style.RPC)
 public interface Filial {
+    // Identificação
     @WebMethod
     public int getId();
+    
+    // Raft: Estado e liderança
     @WebMethod
     public int getLider();
     @WebMethod
-    public void election(int idCandidate, int idOrigem) throws MalformedURLException;
+    public int getTermo();
     @WebMethod
-    public void announceLeader(int idLeader, int idOrigem);
+    public String getEstado(); // "FOLLOWER", "CANDIDATE", "LEADER"
     
-    // Método público para o restaurante fazer pedidos
+    // Raft: RequestVote RPC (para eleição)
+    @WebMethod
+    public boolean requestVote(int termo, int candidatoId, int lastLogIndex, int lastLogTerm);
+    
+    // Raft: AppendEntries RPC (heartbeat e coordenação)
+    @WebMethod
+    public boolean appendEntries(int termo, int liderId, int prevLogIndex, int prevLogTerm, String[] entries, int leaderCommit);
+    
+    // Método público para o restaurante fazer pedidos (via líder)
     @WebMethod
     public boolean solicitarProdutos(String[] produtos) throws MalformedURLException;
     
-    // Métodos internos para estoque (podem ser usados internamente)
+    // Métodos para estoque
     @WebMethod
     public boolean temEstoque(String[] produtos);
     @WebMethod
@@ -29,11 +40,15 @@ public interface Filial {
     @WebMethod
     public int consultarEstoque(String produto);
     
-    // Métodos internos do algoritmo de consenso (não expostos ao restaurante)
+    // Método para consultar quais produtos estão disponíveis de uma lista
     @WebMethod
-    public void iniciarConsenso(String[] produtos, int idOrigem, int idFilialEscolhida) throws MalformedURLException;
+    public String[] consultarProdutosDisponiveis(String[] produtos);
+    
+    // Método para calcular média de estoque (para ordenação)
     @WebMethod
-    public void receberConsenso(String[] produtos, int idOrigem, int idFilialEscolhida) throws MalformedURLException;
+    public double calcularMediaEstoque();
+    
+    // Consenso: processa apenas os produtos específicos fornecidos
     @WebMethod
-    public void anunciarDecisao(int idFilialEscolhida, int idOrigem, boolean processado) throws MalformedURLException;
+    public boolean processarProdutosEspecificos(String[] produtos, int termo, int liderId);
 }

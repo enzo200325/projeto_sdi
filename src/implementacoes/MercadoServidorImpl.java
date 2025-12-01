@@ -3,6 +3,7 @@ package implementacoes;
 import classes.Pedido;
 import interfaces.Filial;
 import interfaces.MercadoServidor;
+import javax.jws.WebMethod;
 import javax.jws.WebService;
 import javax.xml.namespace.QName;
 import javax.xml.ws.Endpoint;
@@ -30,6 +31,11 @@ public class MercadoServidorImpl implements MercadoServidor {
     private Filial[] filiais;
     private String[] urlsFiliais = {"http://127.0.0.1:9876/filial", "http://127.0.0.1:9875/filial", "http://127.0.0.1:9874/filial"};
     
+    // Referência ao líder atual (atualizada via heartbeats)
+    private volatile Filial filialLider = null;
+    private volatile int termoLider = -1;
+    private volatile long ultimoHeartbeatLider = 0;
+    
     // Método público para obter URLs das filiais (útil para debug)
     public String[] getUrlsFiliais() {
         return urlsFiliais;
@@ -47,16 +53,20 @@ public class MercadoServidorImpl implements MercadoServidor {
     
     private void conectarFiliais() {
         filiais = new Filial[urlsFiliais.length];
-        try {
-            for (int i = 0; i < urlsFiliais.length; i++) {
+        int filiaisConectadas = 0;
+        for (int i = 0; i < urlsFiliais.length; i++) {
+            try {
                 filiais[i] = getFilial(urlsFiliais[i]);
+                filiais[i].getId(); // Testa conexão
                 System.out.println("Mercado conectado à filial: " + urlsFiliais[i]);
+                filiaisConectadas++;
+            } catch (Exception e) {
+                System.out.println("Mercado: Não foi possível conectar à filial " + urlsFiliais[i] + 
+                                 " (pode estar iniciando ainda)");
+                filiais[i] = null; // Marca como não conectada
             }
-            System.out.println("Mercado conectado a " + filiais.length + " filiais.\n");
-        } catch (Exception e) {
-            System.err.println("Aviso: Não foi possível conectar a todas as filiais: " + e.getMessage());
-            System.err.println("Certifique-se de que o FilialServidorPublisher está rodando.");
         }
+        System.out.println("Mercado: " + filiaisConectadas + "/" + urlsFiliais.length + " filiais conectadas.\n");
     }
 
     private Filial getFilial(String url){
@@ -107,108 +117,202 @@ public class MercadoServidorImpl implements MercadoServidor {
     }
     
     /**
-     * Obtém a filial líder atual consultando as filiais disponíveis.
-     * Se o líder não for encontrado ou estiver morto, tenta obter novamente.
+     * Obtém a filial líder atual.
+     * O líder é conhecido automaticamente através de heartbeats.
+     * Se não há líder conhecido ou o líder morreu, tenta descobrir consultando filiais.
      * 
      * @return A filial líder, ou null se nenhuma filial estiver disponível
      */
     private Filial obterFilialLider() {
+        // Verifica se temos um líder conhecido e se ainda está válido
+        if (filialLider != null) {
+            try {
+                // Verifica se o líder ainda está vivo
+                filialLider.getId(); // Testa se está vivo
+                
+                // Verifica se recebeu heartbeat recente (menos de 1 segundo)
+                long tempoDesdeUltimoHeartbeat = System.currentTimeMillis() - ultimoHeartbeatLider;
+                if (tempoDesdeUltimoHeartbeat < 1000) { // Heartbeat recente
+                    return filialLider;
+                } else {
+                    System.out.println("Mercado: Líder conhecido não enviou heartbeat recente (" + tempoDesdeUltimoHeartbeat + "ms). Descobrindo novo líder...");
+                    filialLider = null;
+                    termoLider = -1;
+                }
+            } catch (Exception e) {
+                // Líder morreu
+                System.out.println("Mercado: Líder conhecido morreu. Descobrindo novo líder...");
+                filialLider = null;
+                termoLider = -1;
+            }
+        }
+        
+        // Se não temos líder conhecido, tenta descobrir consultando filiais
         if (filiais == null) {
             System.out.println("Mercado: Filiais não disponíveis");
             return null;
         }
         
-        // Primeiro, garante que todas as filiais estejam conectadas
-        garantirConexoesFiliais();
-        
-        // Consulta uma filial viva para descobrir quem é o líder
+        // Tenta encontrar qualquer filial viva para descobrir quem é o líder
         int idLider = -1;
+        
         for (int i = 0; i < filiais.length; i++) {
             if (filiais[i] != null) {
                 try {
+                    filiais[i].getId(); // Testa se está viva
                     idLider = filiais[i].getLider();
                     if (idLider != -1) {
-                        System.out.println("Mercado: Líder identificado: filial " + idLider);
+                        System.out.println("Mercado: Líder identificado através da filial " + i + ": filial " + idLider);
                         break;
                     }
                 } catch (Exception e) {
-                    // Filial está morta, tenta reconectar
+                    // Filial morreu, tenta reconectar
                     try {
                         filiais[i] = getFilial(urlsFiliais[i]);
+                        filiais[i].getId();
                         idLider = filiais[i].getLider();
                         if (idLider != -1) {
                             System.out.println("Mercado: Líder identificado após reconexão: filial " + idLider);
                             break;
                         }
                     } catch (Exception e2) {
-                        // Continua tentando próxima filial
+                        filiais[i] = null;
                     }
+                }
+            } else {
+                try {
+                    filiais[i] = getFilial(urlsFiliais[i]);
+                    filiais[i].getId();
+                    idLider = filiais[i].getLider();
+                    if (idLider != -1) {
+                        System.out.println("Mercado: Conectado à filial " + i + " e identificado líder: filial " + idLider);
+                        break;
+                    }
+                } catch (Exception e) {
+                    // Continua
                 }
             }
         }
         
         if (idLider == -1) {
-            System.err.println("Mercado: Não foi possível identificar o líder (eleição pode estar em andamento)");
+            System.err.println("Mercado: Não foi possível identificar o líder (nenhuma filial disponível ou eleição em andamento)");
             return null;
         }
         
-        // Agora encontra a filial com o ID do líder
+        // Encontra a filial com o ID do líder
         for (int i = 0; i < filiais.length; i++) {
             if (filiais[i] != null) {
                 try {
-                    int idFilial = filiais[i].getId();
-                    if (idFilial == idLider) {
-                        System.out.println("Mercado: Filial líder encontrada (ID: " + idLider + ", porta: " + (9876 - i) + ")");
-                        return filiais[i];
+                    if (filiais[i].getId() == idLider) {
+                        filialLider = filiais[i];
+                        termoLider = filiais[i].getTermo();
+                        System.out.println("Mercado: Filial líder encontrada e armazenada (ID: " + idLider + ", termo: " + termoLider + ")");
+                        return filialLider;
                     }
                 } catch (Exception e) {
-                    // Filial está morta, tenta reconectar
                     try {
                         filiais[i] = getFilial(urlsFiliais[i]);
-                        int idFilial = filiais[i].getId();
-                        if (idFilial == idLider) {
-                            System.out.println("Mercado: Filial líder encontrada após reconexão (ID: " + idLider + ")");
-                            return filiais[i];
+                        if (filiais[i].getId() == idLider) {
+                            filialLider = filiais[i];
+                            termoLider = filiais[i].getTermo();
+                            return filialLider;
                         }
                     } catch (Exception e2) {
-                        // Continua procurando
+                        filiais[i] = null;
                     }
+                }
+            } else {
+                try {
+                    filiais[i] = getFilial(urlsFiliais[i]);
+                    if (filiais[i].getId() == idLider) {
+                        filialLider = filiais[i];
+                        termoLider = filiais[i].getTermo();
+                        return filialLider;
+                    }
+                } catch (Exception e) {
+                    // Continua
                 }
             }
         }
         
-        // Se chegou aqui, o líder não foi encontrado (pode ter morrido)
-        System.err.println("Mercado: Filial líder (ID: " + idLider + ") não foi encontrada. Pode ter morrido.");
+        System.err.println("Mercado: Filial líder (ID: " + idLider + ") não foi encontrada.");
         return null;
     }
     
     /**
-     * Garante que todas as filiais estejam conectadas, reconectando as que estiverem mortas.
+     * Método chamado pelo líder para notificar o mercado (heartbeat).
+     * Atualiza a referência ao líder automaticamente.
      */
-    private void garantirConexoesFiliais() {
-        for (int i = 0; i < filiais.length; i++) {
-            if (filiais[i] == null) {
-                // Filial nunca foi conectada
-                try {
-                    filiais[i] = getFilial(urlsFiliais[i]);
-                    filiais[i].getId(); // Testa conexão
-                } catch (Exception e) {
-                    // Não foi possível conectar agora, mas continua
-                }
-            } else {
-                // Testa se a filial ainda está viva
-                try {
-                    filiais[i].getId();
-                } catch (Exception e) {
-                    // Filial morreu, tenta reconectar
+    @WebMethod
+    @Override
+    public void notificarLider(int termo, int liderId) {
+        // Se o termo é maior ou igual ao termo conhecido, atualiza referência ao líder
+        if (termo >= termoLider) {
+            int termoAnterior = termoLider;
+            
+            // Encontra a filial com o ID do líder
+            for (int i = 0; i < filiais.length; i++) {
+                if (filiais[i] != null) {
+                    try {
+                        if (filiais[i].getId() == liderId) {
+                            filialLider = filiais[i];
+                            termoLider = termo;
+                            ultimoHeartbeatLider = System.currentTimeMillis();
+                            
+                            if (termo > termoAnterior) {
+                                System.out.println("Mercado: ✓ Novo líder notificado! Filial " + liderId + " (termo: " + termo + ")");
+                            }
+                            return;
+                        }
+                    } catch (Exception e) {
+                        // Filial morreu, tenta reconectar
+                        try {
+                            filiais[i] = getFilial(urlsFiliais[i]);
+                            if (filiais[i].getId() == liderId) {
+                                filialLider = filiais[i];
+                                termoLider = termo;
+                                ultimoHeartbeatLider = System.currentTimeMillis();
+                                System.out.println("Mercado: ✓ Líder reconectado e notificado! Filial " + liderId + " (termo: " + termo + ")");
+                                return;
+                            }
+                        } catch (Exception e2) {
+                            filiais[i] = null;
+                        }
+                    }
+                } else {
+                    // Tenta conectar filial que ainda não foi conectada
                     try {
                         filiais[i] = getFilial(urlsFiliais[i]);
-                        filiais[i].getId(); // Testa reconexão
-                    } catch (Exception e2) {
-                        // Não foi possível reconectar
+                        if (filiais[i].getId() == liderId) {
+                            filialLider = filiais[i];
+                            termoLider = termo;
+                            ultimoHeartbeatLider = System.currentTimeMillis();
+                            System.out.println("Mercado: ✓ Líder conectado e notificado! Filial " + liderId + " (termo: " + termo + ")");
+                            return;
+                        }
+                    } catch (Exception e) {
+                        // Continua
                     }
                 }
             }
+        } else {
+            // Termo menor - mensagem antiga, ignora
+            System.out.println("Mercado: Ignorando heartbeat com termo antigo (" + termo + " < " + termoLider + ")");
+        }
+    }
+    
+    /**
+     * Tenta reconectar uma filial específica se necessário.
+     * Usado quando uma filial específica é necessária (ex: o líder).
+     */
+    private Filial tentarReconectarFilial(int index) {
+        try {
+            filiais[index] = getFilial(urlsFiliais[index]);
+            filiais[index].getId(); // Testa conexão
+            return filiais[index];
+        } catch (Exception e) {
+            filiais[index] = null;
+            return null;
         }
     }
     

@@ -1,5 +1,6 @@
 ClienteTeste.class
 classes/Comanda.class
+implementacoes/FilialImpl$Estado.class
 servers/FilialServidorPublisher.class
 interfaces/Restaurante.class
 classes/Prato.class

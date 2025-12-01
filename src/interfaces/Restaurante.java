@@ -17,7 +17,7 @@ public interface Restaurante extends Remote {
     public String fazerPedido(int comanda, String[] pedido) throws RemoteException;
     /* Solicita o valor total para pagamento */
     public float valorComanda(int comanda) throws RemoteException;
-    /* Realiza o pagamento e libera */
-    public boolean fecharComanda(int comanda) throws RemoteException;
+    /* Realiza o pagamento e libera. Retorna tempo restante em segundos (0 se pode fechar) */
+    public int fecharComanda(int comanda) throws RemoteException;
 
 }

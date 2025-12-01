@@ -108,14 +108,26 @@ public class MesasCliente {
         System.out.println("Fechar qual comanda?");
         int idx = Integer.parseInt(s.nextLine());
 
-        if(!restaurante.fecharComanda(idx - 1)) {
-            System.out.println("Ainda existem pedidos em produção.");
-            return false;
-        }
-        else {
-            float total = restaurante.valorComanda(idx - 1);
-            System.out.println("Total comanda: R$" + total);
-            return true;
+        // Tenta fechar a comanda (fica tentando até conseguir)
+        while (true) {
+            int tempoRestante = restaurante.fecharComanda(idx - 1);
+            
+            if (tempoRestante == 0) {
+                // Pode fechar!
+                float total = restaurante.valorComanda(idx - 1);
+                System.out.println("✓ Comanda fechada com sucesso!");
+                System.out.println("Total comanda: R$" + total);
+                return true;
+            } else {
+                // Ainda está em preparo
+                System.out.println("⏳ Ainda existem pedidos em produção. Tempo restante: " + tempoRestante + " segundos");
+                System.out.println("Aguardando... (pressione Enter para verificar novamente ou Ctrl+C para sair)");
+                try {
+                    Thread.sleep(1000); // Aguarda 1 segundo antes de tentar novamente
+                } catch (InterruptedException e) {
+                    return false;
+                }
+            }
         }
     }
 

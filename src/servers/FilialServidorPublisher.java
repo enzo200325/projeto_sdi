@@ -42,39 +42,46 @@ public class FilialServidorPublisher {
             return;
         }
 
-        // URL da próxima filial no anel
-        String nextUrl = URLS_FILIAIS[(myIndex + 1) % URLS_FILIAIS.length];
-
         System.out.println("Publicando filial na URL: " + myUrl);
-        System.out.println("Próxima filial no anel: " + nextUrl);
+        System.out.println("Conectando a todas as outras filiais (topologia mesh)...");
 
         // Publica esta filial
         FilialImpl filialAtual = new FilialImpl(myUrl);
         Endpoint.publish(myUrl, filialAtual);
 
-        // Aguarda as demais filiais subirem e tenta conectar em loop
-        Filial filialNext = null;
-        while (filialNext == null) {
-            try {
-                URL wsdlNext = new URL(nextUrl + "?wsdl");
-                QName qname = new QName("http://implementacoes/", "FilialImplService");
-                Service service = Service.create(wsdlNext, qname);
-                filialNext = service.getPort(Filial.class);
-                filialAtual.setNext(filialNext);
-                filialAtual.setNextUrl(nextUrl); // Armazena URL para reconexão
-                System.out.println("Filial publicada e conectada ao anel.");
-            } catch (Exception e) {
-                System.out.println("Ainda não consegui conectar na próxima filial (" + nextUrl + "). Tentando novamente em 1s...");
+        // Conecta a TODAS as outras filiais (mesh topology para Raft)
+        int filiaisConectadas = 0;
+        while (filiaisConectadas < URLS_FILIAIS.length - 1) {
+            for (String url : URLS_FILIAIS) {
+                if (url.equals(myUrl)) continue; // Pula a própria URL
+                
+                try {
+                    URL wsdl = new URL(url + "?wsdl");
+                    QName qname = new QName("http://implementacoes/", "FilialImplService");
+                    Service service = Service.create(wsdl, qname);
+                    Filial filial = service.getPort(Filial.class);
+                    
+                    // Adiciona à lista de filiais conhecidas
+                    filialAtual.adicionarFilial(filial, url);
+                    filiaisConectadas++;
+                    System.out.println("Filial conectada: " + url);
+                } catch (Exception e) {
+                    System.out.println("Erro ao conectar à filial: " + url + " - " + e.getMessage());
+                    // Ainda não está disponível, tenta depois
+                }
+            }
+            
+            if (filiaisConectadas < URLS_FILIAIS.length - 1) {
+                System.out.println("Aguardando outras filiais... (" + filiaisConectadas + "/" + (URLS_FILIAIS.length - 1) + " conectadas)");
                 Thread.sleep(1000);
             }
         }
-
-        // As filiais agora iniciam eleição automaticamente quando detectam problemas
-        // ou podem iniciar manualmente quando necessário
-        // Removida eleição automática do início - filiais são mais resilientes agora
         
-        System.out.println("Filial pronta para participar de eleições e consensos.");
-        System.out.println("(Eleições serão iniciadas automaticamente quando necessário)");
+        System.out.println("\n✓ Filial " + filialAtual.getId() + " pronta!");
+        System.out.println("  Conectada a " + (filiaisConectadas - 1) + " outras filiais");
+        System.out.println("  Usando algoritmo Raft para eleição e consenso");
+        System.out.println("  (Eleições serão iniciadas automaticamente quando necessário)\n");
+        
         // Mantém o processo vivo
         Thread.sleep(Long.MAX_VALUE);
     }

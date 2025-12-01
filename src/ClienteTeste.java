@@ -53,40 +53,70 @@ public class ClienteTeste {
         
         Thread.sleep(1000);
         
-        // Teste 3: Forçar uso das filiais (fazer muitos pedidos do mesmo prato)
-        System.out.println("   Teste 3: Forçando uso das filiais (múltiplos pedidos do mesmo prato)...");
-        System.out.println("   (Isso deve esgotar o estoque do restaurante e acionar as filiais)");
-        String pratoTeste = cardapio[0];
-        Prato pratoInfo = new Prato(pratoTeste);
-        System.out.println("   Prato: " + pratoInfo.nome);
+        // Teste 3: Pedido grande com múltiplos produtos diferentes para forçar uso do mercado
+        System.out.println("   Teste 3: Pedido grande para acionar mercado e consenso distribuído...");
+        System.out.println("   (Fazendo pedido com 10 produtos diferentes para esgotar estoque e acionar filiais)");
         
-        // Faz vários pedidos do mesmo prato para esgotar estoque
-        for (int i = 0; i < 10; i++) {
-            String[] pedido = {pratoTeste};
-            String resultado = restaurante.fazerPedido(comanda - 1, pedido);
-            System.out.println("   Pedido " + (i + 1) + ": " + resultado);
-            if (resultado.contains("filiais") || resultado.contains("mercado")) {
-                System.out.println("   ✓ Filiais/Mercado foram acionados!\n");
-                break;
-            }
-            Thread.sleep(500);
+        // Primeiro, esgota o estoque fazendo pedidos repetidos dos primeiros produtos
+        System.out.println("   Esgotando estoque dos primeiros produtos...");
+        for (int i = 0; i < 5; i++) {
+            String[] pedidoEsgotar = {cardapio[0]}; // Primeiro produto
+            String resultado = restaurante.fazerPedido(comanda - 1, pedidoEsgotar);
+            System.out.println("   Pedido " + (i + 1) + " para esgotar estoque: " + resultado);
+            Thread.sleep(200);
         }
         
-        Thread.sleep(2000);
+        // Agora faz pedido grande com múltiplos produtos diferentes
+        // Seleciona 10 produtos diferentes do cardápio
+        int numProdutos = Math.min(10, cardapio.length);
+        String[] pedidoGrande = new String[numProdutos];
+        System.out.println("\n   Produtos no pedido grande:");
+        for (int i = 0; i < numProdutos; i++) {
+            pedidoGrande[i] = cardapio[i];
+            Prato prato = new Prato(cardapio[i]);
+            System.out.println("   - " + prato.nome);
+        }
+        
+        System.out.println("\n   Enviando pedido grande ao restaurante...");
+        String resultado3 = restaurante.fazerPedido(comanda - 1, pedidoGrande);
+        System.out.println("   Resultado: " + resultado3);
+        
+        if (resultado3.contains("filiais") || resultado3.contains("mercado")) {
+            System.out.println("   ✓ Mercado/Filiais foram acionados!");
+            System.out.println("   → Observe os logs das filiais para ver o consenso distribuído em ação!");
+        } else {
+            System.out.println("   ⚠ Mercado/Filiais NÃO foram acionados (restaurante ainda tinha estoque)");
+        }
+        
+        Thread.sleep(3000); // Aguarda um pouco para ver os logs do consenso
         
         // Consulta valor da comanda
         System.out.println("4. Consultando valor da comanda...");
         float valor = restaurante.valorComanda(comanda - 1);
         System.out.println("   Valor total: R$ " + String.format("%.2f", valor) + "\n");
         
-        // Tenta fechar comanda
+        // Tenta fechar comanda (fica tentando até conseguir)
         System.out.println("5. Tentando fechar comanda...");
-        boolean fechou = restaurante.fecharComanda(comanda - 1);
-        if (fechou) {
-            System.out.println("   ✓ Comanda fechada com sucesso!");
-            System.out.println("   Total pago: R$ " + String.format("%.2f", valor));
-        } else {
-            System.out.println("   ⚠ Comanda não pode ser fechada (ainda há pedidos em preparo)");
+        int tentativas = 0;
+        while (true) {
+            int tempoRestante = restaurante.fecharComanda(comanda - 1);
+            
+            if (tempoRestante == 0) {
+                // Pode fechar!
+                System.out.println("   ✓ Comanda fechada com sucesso!");
+                System.out.println("   Total pago: R$ " + String.format("%.2f", valor));
+                break;
+            } else {
+                // Ainda está em preparo
+                tentativas++;
+                System.out.println("   ⏳ Pedidos ainda em preparo... Tempo restante: " + tempoRestante + " segundos");
+                System.out.println("   (Tentativa " + tentativas + " - aguardando...)");
+                
+                // Aguarda um pouco antes de tentar novamente
+                // Aguarda o tempo mínimo entre tentativas (1 segundo) ou o tempo restante, o que for menor
+                int tempoAguardar = Math.min(1000, tempoRestante * 1000);
+                Thread.sleep(tempoAguardar);
+            }
         }
         
         System.out.println("\n=== Teste concluído ===");
