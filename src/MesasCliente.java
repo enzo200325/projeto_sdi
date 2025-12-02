@@ -15,7 +15,10 @@ public class MesasCliente {
     public static String[] cardapio;
 
     public static void main(String[] args) throws Exception {
-        registry = LocateRegistry.getRegistry("localhost");
+        // Lê porta RMI de propriedade do sistema ou usa padrão 1099
+        String portaRMI = System.getProperty("rmi.port", "1099");
+        int porta = Integer.parseInt(portaRMI);
+        registry = LocateRegistry.getRegistry("localhost", porta);
         restaurante = (Restaurante) registry.lookup("ServerRestaurante");
 
         boolean ok = true;

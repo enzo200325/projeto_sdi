@@ -13,7 +13,10 @@ public class ClienteTeste {
         System.out.println("=== Cliente de Teste - Sistema de Restaurante ===\n");
         
         // Conecta ao restaurante
-        Registry registry = LocateRegistry.getRegistry("localhost");
+        // Lê porta RMI de propriedade do sistema ou usa padrão 1099
+        String portaRMI = System.getProperty("rmi.port", "1099");
+        int porta = Integer.parseInt(portaRMI);
+        Registry registry = LocateRegistry.getRegistry("localhost", porta);
         Restaurante restaurante = (Restaurante) registry.lookup("ServerRestaurante");
         
         System.out.println("Conectado ao restaurante!\n");

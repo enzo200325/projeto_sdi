@@ -10,7 +10,10 @@ public class RestauranteServer {
         try {
             System.out.println("Iniciando servidor do Restaurante...");
             System.out.println("Conectando ao registry RMI...");
-            Registry registry = LocateRegistry.getRegistry("localhost");
+            // Lê porta RMI de propriedade do sistema ou usa padrão 1099
+            String portaRMI = System.getProperty("rmi.port", "1099");
+            int porta = Integer.parseInt(portaRMI);
+            Registry registry = LocateRegistry.getRegistry("localhost", porta);
             
             System.out.println("Criando implementação do Restaurante...");
             System.out.println("(Isso pode falhar se CozinhaServer ou Mercado não estiverem rodando)");

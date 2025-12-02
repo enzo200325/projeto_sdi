@@ -41,7 +41,10 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
 
     public RestauranteImpl() throws RemoteException, NotBoundException, MalformedURLException {
         super();
-        registry = LocateRegistry.getRegistry("localhost");
+        // Lê porta RMI de propriedade do sistema ou usa padrão 1099
+        String portaRMI = System.getProperty("rmi.port", "1099");
+        int porta = Integer.parseInt(portaRMI);
+        registry = LocateRegistry.getRegistry("localhost", porta);
         cozinha = (Cozinha) registry.lookup("ServerCozinha");
 
         url = new URL("http://127.0.0.1:9000/mercado?wsdl");
