@@ -17,7 +17,7 @@ import java.util.*;
 import static java.util.List.*;
 
 @WebService(
-        //endpointInterface = "interfaces.MercadoServidor" // ,
+        endpointInterface = "interfaces.MercadoServidor" // ,
         //targetNamespace = "implementacoes"
 )
 public class MercadoServidorImpl implements MercadoServidor {

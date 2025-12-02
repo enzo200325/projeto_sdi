@@ -417,7 +417,7 @@ public class FilialImpl implements Filial {
         if (mercado != null) {
             try {
                 // Usa um termo fixo (0) já que Bully não usa termos
-                //mercado.notificarLider(0, id);
+                mercado.notificarLider(0, id);
             } catch (Exception e) {
                 mercado = null;
             }
