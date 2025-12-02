@@ -17,7 +17,7 @@ import java.util.*;
 import static java.util.List.*;
 
 @WebService(
-        endpointInterface = "interfaces.MercadoServidor" // ,
+        //endpointInterface = "interfaces.MercadoServidor" // ,
         //targetNamespace = "implementacoes"
 )
 public class MercadoServidorImpl implements MercadoServidor {
@@ -243,8 +243,8 @@ public class MercadoServidorImpl implements MercadoServidor {
      * Método chamado pelo líder para notificar o mercado (heartbeat).
      * Atualiza a referência ao líder automaticamente.
      */
-    @WebMethod
-    @Override
+    //@WebMethod
+    //@Override
     public void notificarLider(int termo, int liderId) {
         // Se o termo é maior ou igual ao termo conhecido, atualiza referência ao líder
         if (termo >= termoLider) {

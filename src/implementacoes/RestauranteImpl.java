@@ -8,8 +8,6 @@ import interfaces.Restaurante;
 
 import java.io.File;
 import java.io.FileNotFoundException;
-import java.net.MalformedURLException;
-import java.rmi.NotBoundException;
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
@@ -23,6 +21,8 @@ import javax.xml.namespace.QName;
 import javax.xml.ws.Service;
 import java.net.URL;
 import interfaces.MercadoServidor;
+import org.apache.zookeeper.ZooKeeper;
+
 
 public class RestauranteImpl extends UnicastRemoteObject implements Restaurante {
     Registry registry;
@@ -34,12 +34,11 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
 
     ArrayList<Integer> id_pedidos;
 
-    URL url;
+    //URL url;
     QName qname;
-    Service service;
     MercadoServidor mercado;
 
-    public RestauranteImpl() throws RemoteException, NotBoundException, MalformedURLException {
+    public RestauranteImpl() throws Exception {
         super();
         // Lê porta RMI de propriedade do sistema ou usa padrão 1099
         String portaRMI = System.getProperty("rmi.port", "1099");
@@ -47,17 +46,77 @@ public class RestauranteImpl extends UnicastRemoteObject implements Restaurante 
         registry = LocateRegistry.getRegistry("localhost", porta);
         cozinha = (Cozinha) registry.lookup("ServerCozinha");
 
-        url = new URL("http://127.0.0.1:9000/mercado?wsdl");
-        qname = new QName("http://implementacoes/", "MercadoServidorImplService");
-        service = Service.create(url, qname);
+
+        // 1. Pergunta ao Zookeeper onde está o serviço
+        System.out.println("ADMIN: Consultando Zookeeper para achar o líder...");
+        String urlDinamica = descobrirUrlDoLider();
+
+        // 2. Conecta
+        URL wsdlUrl = new URL(urlDinamica);
+        System.out.println("ADMIN: Líder encontrado em: " + urlDinamica);
+        System.out.println("ADMIN: wsdlUrl: " + wsdlUrl);
+
+        // Service QName (para criar o Service)
+        QName serviceQName = new QName("http://coordenador.projeto.edu.br/", "MercadoImplService");
+        Service service = Service.create(wsdlUrl, serviceQName);
+        System.out.println("ADMIN: ✓ Service criado com QName: " + serviceQName);
+
+        // Lista as portas disponíveis para debug
+        System.out.println("ADMIN: Portas disponíveis no WSDL:");
+        java.util.Iterator<QName> portsIterator = service.getPorts();
+        java.util.List<QName> portas = new java.util.ArrayList<>();
+        while (portsIterator.hasNext()) {
+            QName port = portsIterator.next();
+            portas.add(port);
+            System.out.println("  - " + port);
+        }
 
         mapaEstoque = new HashMap<>();
         cardapio = buildCardapio();
         comandas = new ArrayList<>();
         mapaPedidos = new HashMap<>();
-        mercado = service.getPort(MercadoServidor.class);
+        
+        // Obtém a porta usando o port QName correto
+        if (!portas.isEmpty()) {
+            // Usa o port QName (não o service QName!)
+            QName portQName = portas.get(0);
+            System.out.println("ADMIN: Obtendo porta com QName: " + portQName);
+            mercado = service.getPort(portQName, MercadoServidor.class);
+            System.out.println("ADMIN: ✓ Porta obtida com sucesso!");
+        } else {
+            throw new RuntimeException("Nenhuma porta disponível no WSDL do mercado");
+        }
 
         id_pedidos = new ArrayList<>();
+    }
+
+    // Método auxiliar para descobrir a URL
+    private String descobrirUrlDoLider() throws Exception {
+
+        
+
+        System.out.println("Environment variables:");
+        System.out.println(System.getenv());
+        String zkHost = System.getenv("ZOOKEEPER_HOST"); 
+        //String zkHost = "10.20.160.68:2181,10.20.160.68:2182,10.20.160.68:2183"
+        System.out.println("ZOOKEEPER_HOST: " + zkHost);
+
+        // Conecta no ZK
+        ZooKeeper zkClient = new ZooKeeper(zkHost, 10000, event -> {});
+        
+        // Espera conectar... (Simplificado)
+        while(!zkClient.getState().isConnected()) Thread.sleep(100);
+
+        // Lê os dados do nó /servico-soap
+        if (zkClient.exists("/servico-soap", false) != null) {
+            byte[] dados = zkClient.getData("/servico-soap", false, null);
+            String url = new String(dados);
+            zkClient.close();
+            return url;
+        }
+        
+        zkClient.close();
+        throw new Exception("Nenhum líder registrou a URL do SOAP ainda.");
     }
 
     public String[] buildCardapio (){

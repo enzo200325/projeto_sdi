@@ -14,6 +14,6 @@ public interface MercadoServidor {
     int tempoEntrega(int restaurante);
     
     // Método para o líder notificar o mercado (heartbeat)
-    @WebMethod
-    void notificarLider(int termo, int liderId);
+    //@WebMethod
+    //void notificarLider(int termo, int liderId);
 }

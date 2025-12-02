@@ -183,7 +183,6 @@ public class FilialImpl implements Filial {
         lockFiliais.lock();
         try {
             List<Filial> filiaisParaEleicao = new ArrayList<>(todasFiliais);
-            int respostasRecebidas = 0;
             
             for (Filial filial : filiaisParaEleicao) {
                 try {
@@ -418,7 +417,7 @@ public class FilialImpl implements Filial {
         if (mercado != null) {
             try {
                 // Usa um termo fixo (0) já que Bully não usa termos
-                mercado.notificarLider(0, id);
+                //mercado.notificarLider(0, id);
             } catch (Exception e) {
                 mercado = null;
             }
@@ -509,6 +508,11 @@ public class FilialImpl implements Filial {
         synchronized (this) {
             // Se o candidato tem ID menor, responde OK
             if (candidatoId < id) {
+                // Se é coordenador, tenta descobrir e adicionar a filial candidata à lista
+                if (estado == Estado.COORDINATOR) {
+                    descobrirEAdicionarFilial(candidatoId);
+                }
+                
                 // Verifica se já está em eleição ou se iniciou eleição recentemente (cooldown)
                 long tempoDesdeUltimaEleicao = System.currentTimeMillis() - ultimaEleicaoIniciada;
                 boolean podeIniciarEleicao = (estado != Estado.ELECTION && estado != Estado.COORDINATOR) && 
@@ -538,6 +542,61 @@ public class FilialImpl implements Filial {
             
             // Se o candidato tem ID maior ou igual, não responde (ou responde false)
             return false;
+        }
+    }
+    
+    /**
+     * Tenta descobrir e adicionar uma filial à lista conhecida
+     */
+    private void descobrirEAdicionarFilial(int filialId) {
+        lockFiliais.lock();
+        try {
+            // Verifica se já conhece esta filial
+            boolean jaConhece = false;
+            for (Filial filial : todasFiliais) {
+                try {
+                    if (filial != null && filial.getId() == filialId) {
+                        jaConhece = true;
+                        break;
+                    }
+                } catch (Exception e) {
+                    // Filial morta, continua
+                }
+            }
+            
+            if (jaConhece) {
+                return; // Já conhece, não precisa descobrir
+            }
+            
+            // Tenta descobrir a filial consultando as URLs conhecidas
+            String[] urlsConhecidas = {
+                "http://127.0.0.1:9876/filial",
+                "http://127.0.0.1:9875/filial",
+                "http://127.0.0.1:9874/filial"
+            };
+            
+            for (String url : urlsConhecidas) {
+                if (url.equals(my_url)) continue; // Pula própria URL
+                if (urlsFiliais.contains(url)) continue; // Já está na lista
+                
+                try {
+                    java.net.URL wsdl = new java.net.URL(url + "?wsdl");
+                    javax.xml.namespace.QName qname = new javax.xml.namespace.QName("http://implementacoes/", "FilialImplService");
+                    javax.xml.ws.Service service = javax.xml.ws.Service.create(wsdl, qname);
+                    Filial filial = service.getPort(Filial.class);
+                    
+                    // Verifica se é a filial que estamos procurando
+                    if (filial.getId() == filialId) {
+                        adicionarFilial(filial, url);
+                        System.out.println("Filial " + id + " (COORDENADOR): Descobriu e adicionou filial " + filialId + " à lista (URL: " + url + ")");
+                        break;
+                    }
+                } catch (Exception e) {
+                    // Não é esta URL ou filial não está disponível, continua
+                }
+            }
+        } finally {
+            lockFiliais.unlock();
         }
     }
     
@@ -583,20 +642,30 @@ public class FilialImpl implements Filial {
             // Bully: atualiza líder e heartbeat
             if (liderId != id) {
                 int liderAnterior = this.id_lider;
+                boolean estavaEmEleicao = (this.estado == Estado.ELECTION);
+                
                 this.id_lider = liderId;
                 this.estado = Estado.NORMAL;
                 this.ultimoHeartbeat = System.currentTimeMillis();
+                
+                // Tenta descobrir e adicionar o coordenador à lista se ainda não estiver
+                descobrirEAdicionarFilial(liderId);
                 
                 if (liderAnterior != liderId && liderAnterior != -1) {
                     System.out.println("Filial " + id + ": Recebeu heartbeat de coordenador " + liderId + 
                                      " (anterior: " + liderAnterior + ")");
                 } else if (liderAnterior == -1 && liderId != -1) {
                     System.out.println("Filial " + id + ": Recebeu heartbeat de coordenador " + liderId);
+                } else if (liderAnterior == liderId) {
+                    // Mesmo coordenador - heartbeat periódico (não loga para evitar spam, mas atualiza heartbeat)
+                    // Log apenas ocasionalmente para debug
+                    if (System.currentTimeMillis() % 5000 < 100) {
+                        System.out.println("Filial " + id + ": Recebeu heartbeat periódico de coordenador " + liderId);
+                    }
                 }
                 
                 // Se estava em eleição, para a eleição
-                if (this.estado == Estado.ELECTION) {
-                    this.estado = Estado.NORMAL;
+                if (estavaEmEleicao) {
                     System.out.println("Filial " + id + ": Recebeu heartbeat durante eleição. Parando eleição.");
                 }
             }
@@ -688,7 +757,6 @@ public class FilialImpl implements Filial {
         List<Map.Entry<Filial, Double>> filiaisComMedia = new ArrayList<>();
         for (int i = 0; i < filiaisOrdenadas.size(); i++) {
             Filial f = filiaisOrdenadas.get(i);
-            int filialId = idsFiliais.get(i);
             try {
                 double media;
                 if (f == null) {
