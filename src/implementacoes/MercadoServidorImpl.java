@@ -296,8 +296,9 @@ public class MercadoServidorImpl implements MercadoServidor {
                 }
             }
         } else {
-            // Termo menor - mensagem antiga, ignora
-            System.out.println("Mercado: Ignorando heartbeat com termo antigo (" + termo + " < " + termoLider + ")");
+            // Termo menor - mensagem antiga, ignora silenciosamente
+            // A filial deve descobrir o termo atual consultando outras filiais
+            // Não logamos para evitar spam
         }
     }
     
@@ -360,11 +361,24 @@ public class MercadoServidorImpl implements MercadoServidor {
     }
 
     public int tempoEntrega(int restaurante) {
-        int segundo_atual = LocalTime.now().getSecond(), tamanho = restaurantesClientes.get(restaurante).size();
+        int segundo_atual = LocalTime.now().getSecond();
+        int tamanho = restaurantesClientes.get(restaurante).size();
+        
+        if (tamanho == 0) {
+            return 0; // Não há pedidos
+        }
 
-        Pedido pedido = restaurantesClientes.get(restaurante).get(tamanho);
+        // Pega o último pedido (índice é 0-based, então tamanho - 1)
+        Pedido pedido = restaurantesClientes.get(restaurante).get(tamanho - 1);
 
-        int rest = Math.max(0, pedido.tempo_entrega - (segundo_atual - pedido.segundo_inicial));
+        // Calcula diferença de segundos, tratando virada de minuto
+        int diferencaSegundos = segundo_atual - pedido.segundo_inicial;
+        if (diferencaSegundos < 0) {
+            // Virada de minuto: segundo_atual < segundo_inicial
+            diferencaSegundos = (60 - pedido.segundo_inicial) + segundo_atual;
+        }
+
+        int rest = Math.max(0, pedido.tempo_entrega - diferencaSegundos);
 
         if(rest == 0) pedido.entregue = true;
         return rest;

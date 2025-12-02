@@ -23,18 +23,16 @@ public class FilialImpl implements Filial {
     private final String my_url;
     private final Random r;
     
-    // Raft: Estados
-    private enum Estado { FOLLOWER, CANDIDATE, LEADER }
-    private volatile Estado estado = Estado.FOLLOWER;
+    // Bully: Estados
+    private enum Estado { NORMAL, ELECTION, COORDINATOR } // COORDINATOR = líder
+    private volatile Estado estado = Estado.NORMAL;
     
-    // Raft: Dados persistentes
-    private volatile int termo = 0; // Termo atual
-    private volatile Integer votedFor = null; // ID da filial que recebeu nosso voto neste termo
-    private volatile int id_lider = -1; // ID do líder atual
-    
-    // Raft: Dados voláteis (resetados após eleição)
+    // Bully: Dados
+    private volatile int id_lider = -1; // ID do líder atual (coordenador)
     private volatile long ultimoHeartbeat = System.currentTimeMillis();
-    private volatile int votosRecebidos = 0;
+    private volatile boolean aguardandoRespostaEleicao = false; // Se está aguardando resposta de eleição
+    private volatile long ultimaEleicaoIniciada = 0; // Timestamp da última eleição iniciada
+    private static final long COOLDOWN_ELEICAO = 1000; // 1 segundo entre eleições
     
     // Raft: Lista de todas as filiais (mesh topology)
     private List<Filial> todasFiliais = new ArrayList<>();
@@ -49,13 +47,12 @@ public class FilialImpl implements Filial {
     private Map<String, Integer> estoque;
     
     // Threads
-    private Thread threadRaft; // Thread principal do Raft
+    private Thread threadBully; // Thread principal do Bully
     
-    // Configuração Raft
-    private static final int TIMEOUT_MIN = 150; // ms
-    private static final int TIMEOUT_MAX = 300; // ms
-    private static final int HEARTBEAT_INTERVAL = 50; // ms
-    
+    // Configuração Bully
+    private static final int TIMEOUT_HEARTBEAT = 300; // ms - timeout para detectar líder morto
+    private static final int HEARTBEAT_INTERVAL = 100; // ms - intervalo entre heartbeats do líder
+
     public FilialImpl(String my_url) {
         this.r = new Random();
         this.id = r.nextInt(2000);
@@ -64,10 +61,10 @@ public class FilialImpl implements Filial {
         inicializarEstoque();
         
         System.out.println("Filial " + id + " inicializada (URL: " + my_url + ")");
-        System.out.println("Estado inicial: FOLLOWER");
+        System.out.println("Estado inicial: NORMAL");
         
-        // Inicia thread Raft
-        iniciarRaft();
+        // Inicia thread Bully
+        iniciarBully();
     }
     
     /**
@@ -116,31 +113,29 @@ public class FilialImpl implements Filial {
     }
     
     /**
-     * Inicia thread principal do Raft
+     * Inicia thread principal do Bully
      */
-    private void iniciarRaft() {
-        threadRaft = new Thread(() -> {
+    private void iniciarBully() {
+        threadBully = new Thread(() -> {
             while (true) {
                 try {
-                    if (estado == Estado.FOLLOWER) {
-                        // Follower: aguarda heartbeat ou timeout
-                        long timeout = TIMEOUT_MIN + r.nextInt(TIMEOUT_MAX - TIMEOUT_MIN);
-                        long tempoEspera = timeout - (System.currentTimeMillis() - ultimoHeartbeat);
+                    if (estado == Estado.NORMAL) {
+                        // Normal: aguarda heartbeat do líder ou timeout
+                        long tempoDesdeUltimoHeartbeat = System.currentTimeMillis() - ultimoHeartbeat;
                         
-                        if (tempoEspera > 0) {
-                            Thread.sleep(tempoEspera);
+                        if (tempoDesdeUltimoHeartbeat > TIMEOUT_HEARTBEAT) {
+                            // Líder morreu ou não está respondendo - inicia eleição
+                            System.out.println("Filial " + id + ": Timeout! Nenhum heartbeat recebido do líder. Iniciando eleição...");
+                            iniciarEleicao();
+                        } else {
+                            // Aguarda até próximo timeout
+                            Thread.sleep(TIMEOUT_HEARTBEAT - tempoDesdeUltimoHeartbeat);
                         }
-                        
-                        // Se não recebeu heartbeat, vira candidato
-                        if (System.currentTimeMillis() - ultimoHeartbeat > timeout) {
-                            System.out.println("Filial " + id + ": Timeout! Nenhum heartbeat recebido. Tornando-se CANDIDATE...");
-                            tornarCandidato();
-                        }
-                    } else if (estado == Estado.CANDIDATE) {
-                        // Candidate: já iniciou eleição, aguarda resultado
+                    } else if (estado == Estado.ELECTION) {
+                        // Em eleição: aguarda resultado
                         Thread.sleep(100);
-                    } else if (estado == Estado.LEADER) {
-                        // Leader: envia heartbeats periodicamente
+                    } else if (estado == Estado.COORDINATOR) {
+                        // Coordenador (líder): envia heartbeats periodicamente
                         Thread.sleep(HEARTBEAT_INTERVAL);
                         enviarHeartbeats();
                     }
@@ -148,56 +143,244 @@ public class FilialImpl implements Filial {
                     Thread.currentThread().interrupt();
                     break;
                 } catch (Exception e) {
-                    System.err.println("Erro na thread Raft da filial " + id + ": " + e.getMessage());
+                    System.err.println("Erro na thread Bully da filial " + id + ": " + e.getMessage());
                 }
             }
         });
-        threadRaft.setDaemon(true);
-        threadRaft.start();
+        threadBully.setDaemon(true);
+        threadBully.start();
     }
     
     /**
-     * Torna esta filial um candidato e inicia eleição
+     * Inicia eleição Bully: envia election para todas as filiais com ID maior
      */
-    private void tornarCandidato() {
+    private void iniciarEleicao() {
+        synchronized (this) {
+            // Verifica novamente se já é coordenador ou já está em eleição
+            if (estado == Estado.COORDINATOR) {
+                System.out.println("Filial " + id + ": Tentou iniciar eleição mas já é coordenador. Ignorando.");
+                return; // Já é líder, não precisa eleger
+            }
+            
+            // Verifica cooldown
+            long tempoDesdeUltimaEleicao = System.currentTimeMillis() - ultimaEleicaoIniciada;
+            if (estado == Estado.ELECTION && tempoDesdeUltimaEleicao < COOLDOWN_ELEICAO) {
+                System.out.println("Filial " + id + ": Tentou iniciar eleição mas já está em eleição (cooldown ativo). Ignorando.");
+                return; // Já está em eleição recentemente
+            }
+            
+            estado = Estado.ELECTION;
+            aguardandoRespostaEleicao = false;
+            ultimaEleicaoIniciada = System.currentTimeMillis();
+        }
+        
+        System.out.println("Filial " + id + ": Iniciando eleição Bully...");
+        
+        // Remove filiais mortas antes de iniciar eleição
+        removerFiliaisMortas();
+        
+        // Envia election para todas as filiais com ID maior
         lockFiliais.lock();
         try {
-            estado = Estado.CANDIDATE;
-            termo++;
-            votedFor = id; // Vota em si mesmo
-            votosRecebidos = 1; // Conta próprio voto
-            ultimoHeartbeat = System.currentTimeMillis(); // Reset timer
+            List<Filial> filiaisParaEleicao = new ArrayList<>(todasFiliais);
+            int respostasRecebidas = 0;
             
-            System.out.println("Filial " + id + ": Tornou-se CANDIDATE no termo " + termo);
-            System.out.println("Filial " + id + ": Iniciando eleição...");
-            
-            // Solicita votos de todas as outras filiais
-            int votosNecessarios = (todasFiliais.size() / 2) + 1; // Maioria
-            
-            for (Filial filial : todasFiliais) {
-                if (filial.getId() != id) {
+            for (Filial filial : filiaisParaEleicao) {
+                try {
+                    int filialId = filial.getId();
+                    if (filialId <= id) {
+                        continue; // Só envia para filiais com ID maior
+                    }
+                    
+                    // Envia election em thread separada
+                    final int filialIdFinal = filialId;
                     new Thread(() -> {
                         try {
-                            boolean voto = filial.requestVote(termo, id, 0, 0);
-                            if (voto) {
-                                votosRecebidos++;
-                                System.out.println("Filial " + id + ": Recebeu voto de " + filial.getId() + 
-                                                 " (total: " + votosRecebidos + "/" + votosNecessarios + ")");
-                                
-                                if (votosRecebidos >= votosNecessarios && estado == Estado.CANDIDATE) {
-                                    tornarLider();
+                            boolean resposta = filial.election(id);
+                            if (resposta) {
+                                synchronized (FilialImpl.this) {
+                                    aguardandoRespostaEleicao = true;
+                                    // Se recebeu resposta, significa que essa filial tem ID maior e pode ser coordenador
+                                    // Atualiza o líder e o heartbeat para evitar timeout imediato
+                                    if (filialIdFinal > id) {
+                                        id_lider = filialIdFinal;
+                                        ultimoHeartbeat = System.currentTimeMillis();
+                                        System.out.println("Filial " + id + ": Recebeu resposta de eleição da filial " + filialIdFinal + 
+                                                         " (ID maior). Atualizando líder e heartbeat.");
+                                    } else {
+                                        System.out.println("Filial " + id + ": Recebeu resposta de eleição da filial " + filialIdFinal);
+                                    }
                                 }
                             }
                         } catch (Exception e) {
                             // Filial pode estar morta, ignora
                         }
                     }).start();
+                } catch (Exception e) {
+                    // Filial morta, continua
+                }
+            }
+        } finally {
+            lockFiliais.unlock();
+        }
+        
+        // Aguarda um pouco para receber respostas
+        try {
+            Thread.sleep(500);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        
+        // Se não recebeu nenhuma resposta, esta filial é a de maior ID - vira líder
+        synchronized (this) {
+            if (estado == Estado.ELECTION && !aguardandoRespostaEleicao) {
+                System.out.println("Filial " + id + ": Não recebeu resposta de nenhuma filial com ID maior. Tornando-se COORDINATOR (líder)!");
+                tornarCoordenador();
+            } else if (estado == Estado.ELECTION) {
+                // Recebeu resposta, aguarda mensagem de coordinator
+                // Mas se já atualizou o líder acima, pode já ter o líder correto
+                if (id_lider != -1) {
+                    System.out.println("Filial " + id + ": Recebeu resposta de eleição. Líder atualizado para " + id_lider + 
+                                     ". Solicitando coordinator e aguardando heartbeat...");
+                    // Solicita explicitamente que o coordenador envie coordinator
+                    lockFiliais.lock();
+                    try {
+                        for (Filial filial : todasFiliais) {
+                            try {
+                                if (filial.getId() == id_lider) {
+                                    // Solicita coordinator de forma síncrona para garantir recebimento
+                                    try {
+                                        filial.coordinator(id_lider);
+                                        System.out.println("Filial " + id + ": Solicitou e recebeu coordinator de " + id_lider);
+                                    } catch (Exception e) {
+                                        // Tenta assíncrono como fallback
+                                        new Thread(() -> {
+                                            try {
+                                                filial.coordinator(id_lider);
+                                            } catch (Exception e2) {
+                                                // Ignora
+                                            }
+                                        }).start();
+                                    }
+                                    break;
+                                }
+                            } catch (Exception e) {
+                                // Continua
+                            }
+                        }
+                    } finally {
+                        lockFiliais.unlock();
+                    }
+                } else {
+                    System.out.println("Filial " + id + ": Recebeu resposta de eleição. Aguardando mensagem de coordinator...");
+                }
+                estado = Estado.NORMAL;
+            }
+        }
+    }
+    
+    /**
+     * Remove filiais mortas da lista
+     */
+    private void removerFiliaisMortas() {
+        lockFiliais.lock();
+        try {
+            List<Filial> filiaisParaRemover = new ArrayList<>();
+            List<String> urlsParaRemover = new ArrayList<>();
+            
+            for (int i = 0; i < todasFiliais.size(); i++) {
+                Filial filial = todasFiliais.get(i);
+                String url = urlsFiliais.get(i);
+                
+                try {
+                    int filialId = filial.getId();
+                    if (filialId == id) {
+                        continue; // Pula própria filial
+                    }
+                    // Se chegou aqui, filial está viva
+                } catch (Exception e) {
+                    // Filial está morta - marca para remover
+                    filiaisParaRemover.add(filial);
+                    urlsParaRemover.add(url);
                 }
             }
             
-            // Se já tem maioria (caso de apenas 1 filial), vira líder imediatamente
-            if (votosRecebidos >= votosNecessarios) {
-                tornarLider();
+            // Remove filiais mortas
+            for (Filial filial : filiaisParaRemover) {
+                todasFiliais.remove(filial);
+            }
+            for (String url : urlsParaRemover) {
+                urlsFiliais.remove(url);
+                System.out.println("Filial " + id + ": Removida filial morta da lista (URL: " + url + ")");
+            }
+        } catch (Exception e) {
+            // Erro ao remover filiais mortas, ignora para não quebrar o sistema
+        } finally {
+            lockFiliais.unlock();
+        }
+    }
+    
+    /**
+     * Torna esta filial o coordenador (líder) - algoritmo Bully
+     */
+    private synchronized void tornarCoordenador() {
+        if (estado == Estado.COORDINATOR) {
+            return; // Já é coordenador
+        }
+        
+        estado = Estado.COORDINATOR;
+        id_lider = id;
+        
+        System.out.println("\n✓ Filial " + id + " é o novo COORDENADOR (líder)!\n");
+        
+        // Remove filiais mortas antes de enviar heartbeats
+        removerFiliaisMortas();
+        
+        // Conecta ao mercado
+        conectarMercado();
+        
+        // Notifica todas as outras filiais que somos o novo coordenador (IMPORTANTE!)
+        notificarNovoCoordenador();
+        
+        // Envia heartbeats imediatamente para garantir que outras filiais saibam
+        enviarHeartbeats();
+        
+        // Notifica o mercado
+        notificarMercado();
+    }
+    
+    /**
+     * Notifica todas as outras filiais que somos o novo coordenador
+     */
+    private void notificarNovoCoordenador() {
+        lockFiliais.lock();
+        try {
+            List<Filial> filiaisParaNotificar = new ArrayList<>(todasFiliais);
+            
+            System.out.println("Filial " + id + " (COORDENADOR): Notificando " + (filiaisParaNotificar.size() - 1) + " filiais sobre novo coordenador...");
+            
+            for (Filial filial : filiaisParaNotificar) {
+                try {
+                    int filialId = filial.getId();
+                    if (filialId != id) {
+                        // Notifica de forma SÍNCRONA (bloqueante) para garantir que todas recebam
+                        try {
+                            filial.coordinator(id);
+                            System.out.println("Filial " + id + " (COORDENADOR): Notificou filial " + filialId);
+                        } catch (Exception e) {
+                            // Filial pode estar morta, tenta assíncrono como fallback
+                            new Thread(() -> {
+                                try {
+                                    filial.coordinator(id);
+                                } catch (Exception e2) {
+                                    // Ignora
+                                }
+                            }).start();
+                        }
+                    }
+                } catch (Exception e) {
+                    // Filial morta, continua
+                }
             }
         } finally {
             lockFiliais.unlock();
@@ -205,30 +388,7 @@ public class FilialImpl implements Filial {
     }
     
     /**
-     * Torna esta filial o líder
-     */
-    private void tornarLider() {
-        if (estado != Estado.CANDIDATE) return;
-        
-        estado = Estado.LEADER;
-        id_lider = id;
-        votosRecebidos = 0;
-        
-        System.out.println("\n✓ Filial " + id + " é o novo LÍDER no termo " + termo + "!\n");
-        
-        // Conecta ao mercado para enviar heartbeats
-        conectarMercado();
-        
-        // Notifica o mercado imediatamente
-        notificarMercado();
-        
-        // Inicia envio de heartbeats
-        enviarHeartbeats();
-    }
-    
-    /**
-     * Conecta ao mercado (apenas líder precisa).
-     * Tenta reconectar se a conexão não existir ou se falhou anteriormente.
+     * Conecta ao mercado (apenas coordenador precisa)
      */
     private void conectarMercado() {
         if (mercado == null) {
@@ -237,185 +397,211 @@ public class FilialImpl implements Filial {
                 QName qname = new QName("http://implementacoes/", "MercadoServidorImplService");
                 Service service = Service.create(wsdl, qname);
                 mercado = service.getPort(MercadoServidor.class);
-                // A conexão será testada quando tentarmos notificar
-                System.out.println("Filial " + id + " (LÍDER): Tentando conectar ao mercado...");
             } catch (Exception e) {
-                // Não loga erro aqui para evitar spam - será logado em notificarMercado se persistir
                 mercado = null;
             }
         }
     }
     
     /**
-     * Notifica o mercado sobre a liderança.
-     * Tenta reconectar automaticamente se a conexão falhar.
+     * Notifica o mercado sobre a liderança (apenas coordenador)
      */
     private void notificarMercado() {
-        // Se não tem conexão, tenta conectar
+        if (estado != Estado.COORDINATOR) {
+            return; // Não é coordenador, não precisa notificar
+        }
+        
         if (mercado == null) {
             conectarMercado();
         }
         
-        // Se ainda não tem conexão após tentar, loga e retorna
-        if (mercado == null) {
-            // Só loga ocasionalmente para evitar spam (a cada 10 tentativas aproximadamente)
-            if (System.currentTimeMillis() % 10000 < 100) {
-                System.out.println("Filial " + id + " (LÍDER): Aguardando mercado ficar disponível...");
-            }
-            return;
-        }
-        
-        // Tenta notificar o mercado
-        try {
-            mercado.notificarLider(termo, id);
-        } catch (Exception e) {
-            // Mercado pode estar morto ou não disponível, tenta reconectar
-            System.out.println("Filial " + id + " (LÍDER): Conexão com mercado perdida. Tentando reconectar...");
-            mercado = null;
-            conectarMercado();
-            
-            // Se conseguiu reconectar, tenta notificar novamente
-            if (mercado != null) {
-                try {
-                    mercado.notificarLider(termo, id);
-                    System.out.println("Filial " + id + " (LÍDER): ✓ Reconectado ao mercado com sucesso!");
-                } catch (Exception e2) {
-                    // Ainda não conseguiu, mercado pode estar realmente morto
-                    mercado = null;
-                }
+        if (mercado != null) {
+            try {
+                // Usa um termo fixo (0) já que Bully não usa termos
+                mercado.notificarLider(0, id);
+            } catch (Exception e) {
+                mercado = null;
             }
         }
     }
     
     /**
-     * Envia heartbeats para todos os seguidores e para o mercado (apenas líder)
+     * Envia heartbeats para todas as outras filiais e para o mercado (apenas coordenador)
      */
     private void enviarHeartbeats() {
-        if (estado != Estado.LEADER) return;
+        if (estado != Estado.COORDINATOR) return;
         
-        // Envia heartbeats para filiais seguidoras
+        // Envia heartbeats para outras filiais (usando appendEntries para compatibilidade)
         lockFiliais.lock();
         try {
-            for (Filial filial : todasFiliais) {
-                if (filial.getId() != id) {
-                    new Thread(() -> {
-                        try {
-                            filial.appendEntries(termo, id, 0, 0, new String[0], 0);
-                        } catch (Exception e) {
-                            // Seguidor pode estar morto, ignora
-                        }
-                    }).start();
+            List<Filial> filiaisParaHeartbeat = new ArrayList<>(todasFiliais);
+            for (Filial filial : filiaisParaHeartbeat) {
+                try {
+                    int filialId = filial.getId();
+                    if (filialId != id) {
+                        // Usa appendEntries com termo 0 (Bully não usa termos)
+                        filial.appendEntries(0, id, 0, 0, new String[0], 0);
+                    }
+                } catch (Exception e) {
+                    // Filial pode estar morta, ignora
                 }
             }
         } finally {
             lockFiliais.unlock();
         }
         
-        // Envia heartbeat para o mercado
+        // Notifica o mercado
         notificarMercado();
     }
     
-    // ========== Métodos da Interface Filial ==========
     
+    // ========== Métodos da Interface Filial ==========
+
     @WebMethod
     @Override
     public int getId() {
         return id;
     }
-    
+
     @WebMethod
     @Override
     public int getLider() {
         return id_lider;
     }
-    
+
     @WebMethod
     @Override
     public int getTermo() {
-        return termo;
+        // Bully não usa termos, retorna 0 para compatibilidade
+        return 0;
     }
-    
+
     @WebMethod
     @Override
     public String getEstado() {
-        return estado.toString();
+        // Converte estados Bully para compatibilidade com interface
+        if (estado == Estado.COORDINATOR) {
+            return "LEADER";
+        } else if (estado == Estado.ELECTION) {
+            return "CANDIDATE";
+        } else {
+            return "FOLLOWER";
+        }
     }
     
     /**
-     * Raft RequestVote RPC
-     * Candidato solicita voto de um seguidor
+     * Raft RequestVote RPC - MANTIDO PARA COMPATIBILIDADE
+     * No Bully, sempre retorna false (não usa votos)
      */
     @WebMethod
     @Override
     public boolean requestVote(int termo, int candidatoId, int lastLogIndex, int lastLogTerm) {
+        // Bully não usa votos, sempre retorna false
+        return false;
+    }
+    
+    /**
+     * Bully: Election RPC - recebe mensagem de eleição de filial com ID menor
+     */
+    @WebMethod
+    @Override
+    public boolean election(int candidatoId) {
         synchronized (this) {
-            // Se termo é maior, atualiza e vira follower
-            if (termo > this.termo) {
-                this.termo = termo;
-                this.estado = Estado.FOLLOWER;
-                this.votedFor = null;
-                this.id_lider = -1;
-                System.out.println("Filial " + id + ": Atualizou termo para " + termo + " (recebeu RequestVote de " + candidatoId + ")");
+            // Se o candidato tem ID menor, responde OK
+            if (candidatoId < id) {
+                // Verifica se já está em eleição ou se iniciou eleição recentemente (cooldown)
+                long tempoDesdeUltimaEleicao = System.currentTimeMillis() - ultimaEleicaoIniciada;
+                boolean podeIniciarEleicao = (estado != Estado.ELECTION && estado != Estado.COORDINATOR) && 
+                                             (tempoDesdeUltimaEleicao > COOLDOWN_ELEICAO);
+                
+                if (podeIniciarEleicao) {
+                    System.out.println("Filial " + id + ": Recebeu election de filial " + candidatoId + " (ID menor). Respondendo OK e iniciando própria eleição.");
+                    ultimaEleicaoIniciada = System.currentTimeMillis();
+                    
+                    // Inicia própria eleição em thread separada
+                    new Thread(() -> {
+                        iniciarEleicao();
+                    }).start();
+                } else {
+                    // Já está em eleição ou acabou de iniciar uma - apenas responde OK
+                    if (estado == Estado.ELECTION) {
+                        System.out.println("Filial " + id + ": Recebeu election de filial " + candidatoId + " (ID menor). Já está em eleição, apenas respondendo OK.");
+                    } else if (estado == Estado.COORDINATOR) {
+                        System.out.println("Filial " + id + ": Recebeu election de filial " + candidatoId + " (ID menor). Já é coordenador, apenas respondendo OK.");
+                    } else {
+                        System.out.println("Filial " + id + ": Recebeu election de filial " + candidatoId + " (ID menor). Cooldown ativo, apenas respondendo OK.");
+                    }
+                }
+                
+                return true; // Responde OK
             }
             
-            // Vota se:
-            // 1. Termo do candidato >= nosso termo
-            // 2. Não votamos neste termo OU já votamos neste candidato
-            boolean podeVotar = (termo >= this.termo) && 
-                               (votedFor == null || votedFor == candidatoId);
-            
-            if (podeVotar) {
-                votedFor = candidatoId;
-                ultimoHeartbeat = System.currentTimeMillis(); // Reset timer
-                System.out.println("Filial " + id + ": Votou em " + candidatoId + " no termo " + termo);
-                return true;
-            }
-            
+            // Se o candidato tem ID maior ou igual, não responde (ou responde false)
             return false;
         }
     }
     
     /**
-     * Raft AppendEntries RPC (heartbeat)
-     * Líder envia heartbeat para seguidores
+     * Bully: Coordinator RPC - recebe notificação de novo coordenador
+     */
+    @WebMethod
+    @Override
+    public void coordinator(int coordenadorId) {
+        synchronized (this) {
+            if (coordenadorId != id) {
+                int liderAnterior = this.id_lider;
+                this.id_lider = coordenadorId;
+                this.estado = Estado.NORMAL;
+                this.ultimoHeartbeat = System.currentTimeMillis();
+                
+                // Para qualquer eleição em andamento
+                if (this.estado == Estado.ELECTION) {
+                    this.estado = Estado.NORMAL;
+                    System.out.println("Filial " + id + ": Recebeu coordinator durante eleição. Parando eleição.");
+                }
+                
+                if (liderAnterior != coordenadorId) {
+                    System.out.println("Filial " + id + ": Novo coordenador eleito! Filial " + coordenadorId + 
+                                     (liderAnterior != -1 ? " (anterior: " + liderAnterior + ")" : ""));
+                } else {
+                    // Mesmo coordenador, apenas atualiza heartbeat
+                    System.out.println("Filial " + id + ": Recebeu coordinator de " + coordenadorId + ". Atualizando heartbeat.");
+                }
+            }
+        }
+    }
+    
+    /**
+     * Raft AppendEntries RPC (heartbeat) - MANTIDO PARA COMPATIBILIDADE
+     * Agora usado apenas como heartbeat simples do Bully
      */
     @WebMethod
     @Override
     public boolean appendEntries(int termo, int liderId, int prevLogIndex, int prevLogTerm, 
                                  String[] entries, int leaderCommit) {
         synchronized (this) {
-            // Se termo é maior, atualiza e vira follower
-            if (termo > this.termo) {
-                this.termo = termo;
-                this.estado = Estado.FOLLOWER;
-                this.votedFor = null;
-                System.out.println("Filial " + id + ": Atualizou termo para " + termo + " (recebeu heartbeat de " + liderId + ")");
-            }
-            
-            // Se recebeu heartbeat do líder atual ou de um líder com termo maior
-            if (termo >= this.termo) {
+            // Bully: atualiza líder e heartbeat
+            if (liderId != id) {
                 int liderAnterior = this.id_lider;
                 this.id_lider = liderId;
-                this.estado = Estado.FOLLOWER;
+                this.estado = Estado.NORMAL;
                 this.ultimoHeartbeat = System.currentTimeMillis();
                 
-                // Log quando o líder muda
                 if (liderAnterior != liderId && liderAnterior != -1) {
-                    System.out.println("Filial " + id + " (FOLLOWER): Líder mudou! Novo líder: " + liderId + 
-                                     " (anterior: " + liderAnterior + ", termo: " + termo + ")");
+                    System.out.println("Filial " + id + ": Recebeu heartbeat de coordenador " + liderId + 
+                                     " (anterior: " + liderAnterior + ")");
                 } else if (liderAnterior == -1 && liderId != -1) {
-                    System.out.println("Filial " + id + " (FOLLOWER): Líder eleito! Novo líder: " + liderId + " (termo: " + termo + ")");
+                    System.out.println("Filial " + id + ": Recebeu heartbeat de coordenador " + liderId);
                 }
                 
-                // Se era candidato, volta a ser follower
-                if (this.estado == Estado.CANDIDATE) {
-                    System.out.println("Filial " + id + ": Recebeu heartbeat de líder " + liderId + ". Voltando a ser FOLLOWER");
+                // Se estava em eleição, para a eleição
+                if (this.estado == Estado.ELECTION) {
+                    this.estado = Estado.NORMAL;
+                    System.out.println("Filial " + id + ": Recebeu heartbeat durante eleição. Parando eleição.");
                 }
-                
-                return true;
             }
             
-            return false;
+            return true;
         }
     }
     
@@ -428,8 +614,8 @@ public class FilialImpl implements Filial {
     public boolean solicitarProdutos(String[] produtos) throws MalformedURLException {
         System.out.println("\n=== Filial " + id + " recebeu pedido: " + Arrays.toString(produtos));
         
-        // Se não é líder, redireciona para o líder
-        if (estado != Estado.LEADER) {
+        // Se não é coordenador, redireciona para o coordenador
+        if (estado != Estado.COORDINATOR) {
             if (id_lider == -1) {
                 System.err.println("Filial " + id + ": Não há líder conhecido. Aguardando eleição...");
                 return false;
@@ -453,8 +639,10 @@ public class FilialImpl implements Filial {
         }
         
         // Líder coordena consenso complexo: consulta cada filial e coleta produtos
-        System.out.println("\n" + "=".repeat(60));
-        System.out.println("Filial " + id + " (LÍDER): Coordenando consenso para atender pedido...");
+        StringBuilder separador = new StringBuilder();
+        for (int i = 0; i < 60; i++) separador.append("=");
+        System.out.println("\n" + separador.toString());
+        System.out.println("Filial " + id + " (COORDENADOR): Coordenando consenso para atender pedido...");
         
         // Conta quantos de cada produto são necessários
         Map<String, Integer> produtosNecessarios = new HashMap<>();
@@ -466,70 +654,150 @@ public class FilialImpl implements Filial {
         for (Map.Entry<String, Integer> entry : produtosNecessarios.entrySet()) {
             System.out.println("  - " + entry.getKey() + ": " + entry.getValue() + " unidade(s)");
         }
-        System.out.println("=".repeat(60));
+        System.out.println(separador.toString());
         
         // Lista de produtos que ainda precisamos
         List<String> produtosRestantes = new ArrayList<>(Arrays.asList(produtos));
         Map<Integer, List<String>> produtosPorFilial = new HashMap<>(); // Filial -> produtos que ela vai fornecer
         
         // Ordena filiais por média de estoque (maior média primeiro)
+        // INCLUI a própria filial líder na lista para consultar seu próprio estoque
         List<Filial> filiaisOrdenadas = new ArrayList<>();
+        List<Integer> idsFiliais = new ArrayList<>();
+        
+        // Primeiro adiciona a própria filial (líder) como null (será consultada diretamente)
+        filiaisOrdenadas.add(null); // Placeholder - será consultada diretamente
+        idsFiliais.add(id);
+        
         lockFiliais.lock();
         try {
             filiaisOrdenadas.addAll(todasFiliais);
+            for (Filial f : todasFiliais) {
+                try {
+                    idsFiliais.add(f.getId());
+                } catch (Exception e) {
+                    idsFiliais.add(-1);
+                }
+            }
         } finally {
             lockFiliais.unlock();
         }
         
         // Ordena por média de estoque (decrescente)
-        filiaisOrdenadas.sort((f1, f2) -> {
+        // Cria lista de pares (filial, média) para ordenar
+        List<Map.Entry<Filial, Double>> filiaisComMedia = new ArrayList<>();
+        for (int i = 0; i < filiaisOrdenadas.size(); i++) {
+            Filial f = filiaisOrdenadas.get(i);
+            int filialId = idsFiliais.get(i);
             try {
-                double media1 = f1.calcularMediaEstoque();
-                double media2 = f2.calcularMediaEstoque();
-                return Double.compare(media2, media1); // Maior primeiro
+                double media;
+                if (f == null) {
+                    // É a própria filial líder - calcula média diretamente
+                    if (estoque.isEmpty()) {
+                        media = 0.0;
+                    } else {
+                        int soma = 0;
+                        for (int qtd : estoque.values()) {
+                            soma += qtd;
+                        }
+                        media = (double) soma / estoque.size();
+                    }
+                } else {
+                    media = f.calcularMediaEstoque();
+                }
+                filiaisComMedia.add(new AbstractMap.SimpleEntry<>(f, media));
             } catch (Exception e) {
-                return 0;
+                filiaisComMedia.add(new AbstractMap.SimpleEntry<>(f, 0.0));
             }
-        });
+        }
+        
+        // Ordena por média (decrescente)
+        filiaisComMedia.sort((e1, e2) -> Double.compare(e2.getValue(), e1.getValue()));
         
         System.out.println("Filial " + id + " (LÍDER): Filiais ordenadas por média de estoque:");
-        for (Filial f : filiaisOrdenadas) {
-            try {
-                System.out.println("  - Filial " + f.getId() + ": média " + String.format("%.2f", f.calcularMediaEstoque()));
-            } catch (Exception e) {
-                // Ignora filiais mortas
+        for (Map.Entry<Filial, Double> entry : filiaisComMedia) {
+            Filial f = entry.getKey();
+            double media = entry.getValue();
+            if (f == null) {
+                System.out.println("  - Filial " + id + " (EU - LÍDER): média " + String.format("%.2f", media));
+            } else {
+                try {
+                    System.out.println("  - Filial " + f.getId() + ": média " + String.format("%.2f", media));
+                } catch (Exception e) {
+                    // Ignora filiais mortas
+                }
             }
         }
         
         // Consulta cada filial (em ordem) e coleta produtos disponíveis
-        for (Filial filial : filiaisOrdenadas) {
+        for (Map.Entry<Filial, Double> entry : filiaisComMedia) {
+            Filial filial = entry.getKey();
             if (produtosRestantes.isEmpty()) {
                 break; // Já temos todos os produtos
             }
             
             try {
-                // Pergunta quais produtos esta filial tem disponível
-                String[] produtosDisponiveis = filial.consultarProdutosDisponiveis(
-                    produtosRestantes.toArray(new String[0])
-                );
+                String[] produtosDisponiveis;
+                int filialId;
+                
+                if (filial == null) {
+                    // É a própria filial líder - consulta diretamente
+                    filialId = id;
+                    produtosDisponiveis = consultarProdutosDisponiveis(
+                        produtosRestantes.toArray(new String[0])
+                    );
+                } else {
+                    // É outra filial - consulta via RPC
+                    filialId = filial.getId();
+                    produtosDisponiveis = filial.consultarProdutosDisponiveis(
+                        produtosRestantes.toArray(new String[0])
+                    );
+                }
                 
                 if (produtosDisponiveis != null && produtosDisponiveis.length > 0) {
-                    List<String> produtosDestaFilial = Arrays.asList(produtosDisponiveis);
-                    produtosPorFilial.put(filial.getId(), produtosDestaFilial);
-                    
-                    // Conta quantos de cada produto esta filial tem
+                    // Conta quantos de cada produto esta filial tem disponível
                     Map<String, Integer> produtosFilial = new HashMap<>();
                     for (String p : produtosDisponiveis) {
                         produtosFilial.put(p, produtosFilial.getOrDefault(p, 0) + 1);
                     }
                     
-                    System.out.println("Filial " + id + " (LÍDER): ✓ Filial " + filial.getId() + " tem disponível:");
-                    for (Map.Entry<String, Integer> entry : produtosFilial.entrySet()) {
-                        System.out.println("    - " + entry.getKey() + ": " + entry.getValue() + " unidade(s)");
+                    // Conta quantos de cada produto ainda precisamos
+                    Map<String, Integer> produtosNecessariosRestantes = new HashMap<>();
+                    for (String p : produtosRestantes) {
+                        produtosNecessariosRestantes.put(p, produtosNecessariosRestantes.getOrDefault(p, 0) + 1);
                     }
                     
-                    // Remove os produtos que esta filial vai fornecer
-                    produtosRestantes.removeAll(produtosDestaFilial);
+                    // Seleciona apenas os produtos que esta filial pode fornecer (respeitando quantidade necessária)
+                    List<String> produtosDestaFilial = new ArrayList<>();
+                    for (Map.Entry<String, Integer> necessidadeEntry : produtosNecessariosRestantes.entrySet()) {
+                        String produto = necessidadeEntry.getKey();
+                        int quantidadeNecessaria = necessidadeEntry.getValue();
+                        int quantidadeDisponivel = produtosFilial.getOrDefault(produto, 0);
+                        
+                        // Adiciona o produto quantas vezes for necessário (até o limite disponível)
+                        int quantidadeAUsar = Math.min(quantidadeNecessaria, quantidadeDisponivel);
+                        for (int i = 0; i < quantidadeAUsar; i++) {
+                            produtosDestaFilial.add(produto);
+                        }
+                    }
+                    
+                    if (!produtosDestaFilial.isEmpty()) {
+                        produtosPorFilial.put(filialId, produtosDestaFilial);
+                        
+                        // Conta quantos de cada produto esta filial vai fornecer
+                        Map<String, Integer> produtosFornecidos = new HashMap<>();
+                        for (String p : produtosDestaFilial) {
+                            produtosFornecidos.put(p, produtosFornecidos.getOrDefault(p, 0) + 1);
+                        }
+                        
+                        System.out.println("Filial " + id + " (LÍDER): ✓ Filial " + filialId + " tem disponível:");
+                        for (Map.Entry<String, Integer> prodEntry : produtosFornecidos.entrySet()) {
+                            System.out.println("    - " + prodEntry.getKey() + ": " + prodEntry.getValue() + " unidade(s)");
+                        }
+                        
+                        // Remove os produtos que esta filial vai fornecer
+                        produtosRestantes.removeAll(produtosDestaFilial);
+                    }
                     
                     // Mostra o que ainda falta
                     if (!produtosRestantes.isEmpty()) {
@@ -538,16 +806,20 @@ public class FilialImpl implements Filial {
                             aindaFalta.put(p, aindaFalta.getOrDefault(p, 0) + 1);
                         }
                         System.out.println("Filial " + id + " (LÍDER): Ainda faltam:");
-                        for (Map.Entry<String, Integer> entry : aindaFalta.entrySet()) {
-                            System.out.println("    - " + entry.getKey() + ": " + entry.getValue() + " unidade(s)");
+                        for (Map.Entry<String, Integer> faltaEntry : aindaFalta.entrySet()) {
+                            System.out.println("    - " + faltaEntry.getKey() + ": " + faltaEntry.getValue() + " unidade(s)");
                         }
                     }
                 } else {
-                    System.out.println("Filial " + id + " (LÍDER): Filial " + filial.getId() + " não tem produtos disponíveis");
+                    System.out.println("Filial " + id + " (LÍDER): Filial " + filialId + " não tem produtos disponíveis");
                 }
             } catch (Exception e) {
                 // Filial pode estar morta, continua
-                System.err.println("Filial " + id + " (LÍDER): Erro ao consultar filial " + filial.getId() + ": " + e.getMessage());
+                int filialIdErro = (filial == null) ? id : -1;
+                try {
+                    if (filial != null) filialIdErro = filial.getId();
+                } catch (Exception e2) {}
+                System.err.println("Filial " + id + " (LÍDER): Erro ao consultar filial " + filialIdErro + ": " + e.getMessage());
             }
         }
         
@@ -576,28 +848,46 @@ public class FilialImpl implements Filial {
             int filialId = entry.getKey();
             List<String> produtosFilial = entry.getValue();
             
-            lockFiliais.lock();
-            try {
-                for (Filial filial : todasFiliais) {
-                    if (filial.getId() == filialId) {
-                        System.out.println("Filial " + id + " (LÍDER): Processando " + produtosFilial.size() + 
-                                         " produtos na filial " + filialId);
-                        boolean sucesso = filial.processarProdutosEspecificos(
-                            produtosFilial.toArray(new String[0]), 
-                            termo, 
-                            id
-                        );
-                        if (sucesso) {
-                            System.out.println("Filial " + id + " (LÍDER): ✓ Filial " + filialId + " processou com sucesso");
-                        } else {
-                            System.out.println("Filial " + id + " (LÍDER): ✗ Filial " + filialId + " falhou ao processar");
-                            todosSucesso = false;
-                        }
-                        break;
-                    }
+            if (filialId == id) {
+                // É a própria filial líder - processa diretamente
+                System.out.println("Filial " + id + " (LÍDER): Processando " + produtosFilial.size() + 
+                                 " produtos na própria filial (LÍDER)");
+                boolean sucesso = processarProdutosEspecificos(
+                    produtosFilial.toArray(new String[0]), 
+                    0, // Bully não usa termos
+                    id
+                );
+                if (sucesso) {
+                    System.out.println("Filial " + id + " (LÍDER): ✓ Própria filial processou com sucesso");
+                } else {
+                    System.out.println("Filial " + id + " (LÍDER): ✗ Própria filial falhou ao processar");
+                    todosSucesso = false;
                 }
-            } finally {
-                lockFiliais.unlock();
+            } else {
+                // É outra filial - processa via RPC
+                lockFiliais.lock();
+                try {
+                    for (Filial filial : todasFiliais) {
+                        if (filial.getId() == filialId) {
+                            System.out.println("Filial " + id + " (LÍDER): Processando " + produtosFilial.size() + 
+                                             " produtos na filial " + filialId);
+                            boolean sucesso = filial.processarProdutosEspecificos(
+                                produtosFilial.toArray(new String[0]), 
+                                0, // Bully não usa termos
+                                id
+                            );
+                            if (sucesso) {
+                                System.out.println("Filial " + id + " (LÍDER): ✓ Filial " + filialId + " processou com sucesso");
+                            } else {
+                                System.out.println("Filial " + id + " (LÍDER): ✗ Filial " + filialId + " falhou ao processar");
+                                todosSucesso = false;
+                            }
+                            break;
+                        }
+                    }
+                } finally {
+                    lockFiliais.unlock();
+                }
             }
         }
         
@@ -609,7 +899,7 @@ public class FilialImpl implements Filial {
         
         return todosSucesso;
     }
-    
+
     @WebMethod
     @Override
     public boolean temEstoque(String[] produtos) {
@@ -621,7 +911,7 @@ public class FilialImpl implements Filial {
         }
         return true;
     }
-    
+
     @WebMethod
     @Override
     public boolean processarPedido(String[] produtos) {
@@ -681,9 +971,9 @@ public class FilialImpl implements Filial {
     @WebMethod
     @Override
     public boolean processarProdutosEspecificos(String[] produtos, int termo, int liderId) {
-        // Verifica se o termo e líder são válidos
-        if (termo < this.termo || (this.id_lider != -1 && this.id_lider != liderId)) {
-            System.err.println("Filial " + id + ": Rejeitou pedido - termo/líder inválido");
+        // Bully: verifica apenas se o líder é válido (não usa termos)
+        if (this.id_lider != -1 && this.id_lider != liderId) {
+            System.err.println("Filial " + id + ": Rejeitou pedido - líder inválido (esperado: " + this.id_lider + ", recebido: " + liderId + ")");
             return false;
         }
         

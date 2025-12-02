@@ -20,11 +20,17 @@ public interface Filial {
     @WebMethod
     public String getEstado(); // "FOLLOWER", "CANDIDATE", "LEADER"
     
-    // Raft: RequestVote RPC (para eleição)
+    // Bully: Election e Coordinator RPCs
+    @WebMethod
+    public boolean election(int candidatoId); // Recebe mensagem de eleição de filial com ID menor
+    @WebMethod
+    public void coordinator(int coordenadorId); // Recebe notificação de novo coordenador
+    
+    // Raft: RequestVote RPC (para eleição) - MANTIDO PARA COMPATIBILIDADE
     @WebMethod
     public boolean requestVote(int termo, int candidatoId, int lastLogIndex, int lastLogTerm);
     
-    // Raft: AppendEntries RPC (heartbeat e coordenação)
+    // Raft: AppendEntries RPC (heartbeat e coordenação) - MANTIDO PARA COMPATIBILIDADE
     @WebMethod
     public boolean appendEntries(int termo, int liderId, int prevLogIndex, int prevLogTerm, String[] entries, int leaderCommit);
     
