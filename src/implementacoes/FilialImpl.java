@@ -34,10 +34,11 @@ public class FilialImpl implements Filial {
     private volatile long ultimaEleicaoIniciada = 0; // Timestamp da última eleição iniciada
     private static final long COOLDOWN_ELEICAO = 1000; // 1 segundo entre eleições
     
-    // Raft: Lista de todas as filiais (mesh topology)
+    // Lista de filiais conhecidas (descobertas via líder)
     private List<Filial> todasFiliais = new ArrayList<>();
     private List<String> urlsFiliais = new ArrayList<>();
     private ReentrantLock lockFiliais = new ReentrantLock();
+    private volatile boolean registradoComLider = false;
     
     // Conexão com o mercado (para enviar heartbeats)
     private MercadoServidor mercado = null;
@@ -50,21 +51,131 @@ public class FilialImpl implements Filial {
     private Thread threadBully; // Thread principal do Bully
     
     // Configuração Bully
-    private static final int TIMEOUT_HEARTBEAT = 300; // ms - timeout para detectar líder morto
-    private static final int HEARTBEAT_INTERVAL = 100; // ms - intervalo entre heartbeats do líder
+    private static final int TIMEOUT_HEARTBEAT = 3000; // ms - timeout para detectar líder morto
+    private static final int HEARTBEAT_INTERVAL = 1000; // ms - intervalo entre heartbeats do líder
+    
+    // Seed URL (para descobrir o cluster)
+    private final String seedUrl;
 
-    public FilialImpl(String my_url) {
+    /**
+     * Construtor com seed URL (para filiais que entram em cluster existente)
+     */
+    public FilialImpl(String my_url, String seedUrl) {
         this.r = new Random();
         this.id = r.nextInt(2000);
         this.my_url = my_url;
+        this.seedUrl = seedUrl;
         this.estoque = new HashMap<>();
         inicializarEstoque();
         
         System.out.println("Filial " + id + " inicializada (URL: " + my_url + ")");
-        System.out.println("Estado inicial: NORMAL");
+        
+        if (seedUrl != null) {
+            System.out.println("Seed configurado: " + seedUrl);
+            // Conecta ao seed em thread separada (após publicar endpoint)
+            new Thread(() -> {
+                try {
+                    Thread.sleep(500); // Aguarda endpoint publicar
+                    conectarAoSeed();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }).start();
+        } else {
+            System.out.println("Sem seed - aguardando timeout para eleição");
+        }
         
         // Inicia thread Bully
         iniciarBully();
+    }
+    
+    /**
+     * Construtor sem seed (para primeira filial do cluster)
+     */
+    public FilialImpl(String my_url) {
+        this(my_url, null);
+    }
+    
+    /**
+     * Conecta ao seed e descobre o líder do cluster
+     */
+    private void conectarAoSeed() {
+        System.out.println("Filial " + id + ": Conectando ao seed " + seedUrl + "...");
+        
+        try {
+            Filial seed = conectarFilialPorUrl(seedUrl);
+            if (seed == null) {
+                System.out.println("Filial " + id + ": Não conseguiu conectar ao seed");
+                return;
+            }
+            
+            // Descobre quem é o líder
+            int idLider = seed.getLider();
+            if (idLider == -1) {
+                System.out.println("Filial " + id + ": Seed ainda não tem líder, aguardando eleição...");
+                return;
+            }
+            
+            System.out.println("Filial " + id + ": Líder do cluster é a filial " + idLider);
+            
+            // Conecta ao líder (pode ser o próprio seed)
+            Filial lider;
+            if (seed.getId() == idLider) {
+                lider = seed;
+            } else {
+                // Precisa descobrir a URL do líder - pede a lista de filiais ao seed
+                String[] urls = seed.getUrlsFiliais();
+                lider = null;
+                for (String url : urls) {
+                    try {
+                        Filial f = conectarFilialPorUrl(url);
+                        if (f != null && f.getId() == idLider) {
+                            lider = f;
+                            break;
+                        }
+                    } catch (Exception e) {
+                        // Continua tentando
+                    }
+                }
+            }
+            
+            if (lider == null) {
+                System.out.println("Filial " + id + ": Não conseguiu conectar ao líder");
+                return;
+            }
+            
+            // Atualiza estado
+            this.id_lider = idLider;
+            this.ultimoHeartbeat = System.currentTimeMillis();
+            
+            // Se registra com o líder
+            lider.registrarFilial(my_url, id);
+            System.out.println("Filial " + id + ": Registrada com o líder " + idLider);
+            
+            // Obtém lista de filiais do líder
+            String[] urls = lider.getUrlsFiliais();
+            if (urls != null) {
+                System.out.println("Filial " + id + ": Recebeu lista de " + urls.length + " filial(is) do líder");
+                for (String url : urls) {
+                    if (!url.equals(my_url)) {
+                        try {
+                            Filial f = conectarFilialPorUrl(url);
+                            if (f != null) {
+                                adicionarFilial(f, url);
+                            }
+                        } catch (Exception e) {
+                            // Ignora
+                        }
+                    }
+                }
+            }
+            
+            registradoComLider = true;
+            System.out.println("Filial " + id + ": Conectada ao cluster com sucesso!");
+            
+        } catch (Exception e) {
+            System.out.println("Filial " + id + ": Erro ao conectar ao seed: " + e.getMessage());
+        }
     }
     
     /**
@@ -356,7 +467,7 @@ public class FilialImpl implements Filial {
         try {
             List<Filial> filiaisParaNotificar = new ArrayList<>(todasFiliais);
             
-            System.out.println("Filial " + id + " (COORDENADOR): Notificando " + (filiaisParaNotificar.size() - 1) + " filiais sobre novo coordenador...");
+            System.out.println("Filial " + id + " (COORDENADOR): Notificando " + filiaisParaNotificar.size() + " filiais sobre novo coordenador...");
             
             for (Filial filial : filiaisParaNotificar) {
                 try {
@@ -416,8 +527,7 @@ public class FilialImpl implements Filial {
         
         if (mercado != null) {
             try {
-                // Usa um termo fixo (0) já que Bully não usa termos
-                mercado.notificarLider(0, id);
+                mercado.notificarLider(id);
             } catch (Exception e) {
                 mercado = null;
             }
@@ -430,16 +540,12 @@ public class FilialImpl implements Filial {
     private void enviarHeartbeats() {
         if (estado != Estado.COORDINATOR) return;
         
-        // Envia heartbeats para outras filiais (usando appendEntries para compatibilidade)
         lockFiliais.lock();
         try {
-            List<Filial> filiaisParaHeartbeat = new ArrayList<>(todasFiliais);
-            for (Filial filial : filiaisParaHeartbeat) {
+            for (Filial filial : todasFiliais) {
                 try {
-                    int filialId = filial.getId();
-                    if (filialId != id) {
-                        // Usa appendEntries com termo 0 (Bully não usa termos)
-                        filial.appendEntries(0, id, 0, 0, new String[0], 0);
+                    if (filial.getId() != id) {
+                        filial.heartbeat(id);
                     }
                 } catch (Exception e) {
                     // Filial pode estar morta, ignora
@@ -449,7 +555,6 @@ public class FilialImpl implements Filial {
             lockFiliais.unlock();
         }
         
-        // Notifica o mercado
         notificarMercado();
     }
     
@@ -470,15 +575,7 @@ public class FilialImpl implements Filial {
 
     @WebMethod
     @Override
-    public int getTermo() {
-        // Bully não usa termos, retorna 0 para compatibilidade
-        return 0;
-    }
-
-    @WebMethod
-    @Override
     public String getEstado() {
-        // Converte estados Bully para compatibilidade com interface
         if (estado == Estado.COORDINATOR) {
             return "LEADER";
         } else if (estado == Estado.ELECTION) {
@@ -486,17 +583,6 @@ public class FilialImpl implements Filial {
         } else {
             return "FOLLOWER";
         }
-    }
-    
-    /**
-     * Raft RequestVote RPC - MANTIDO PARA COMPATIBILIDADE
-     * No Bully, sempre retorna false (não usa votos)
-     */
-    @WebMethod
-    @Override
-    public boolean requestVote(int termo, int candidatoId, int lastLogIndex, int lastLogTerm) {
-        // Bully não usa votos, sempre retorna false
-        return false;
     }
     
     /**
@@ -631,46 +717,106 @@ public class FilialImpl implements Filial {
     }
     
     /**
-     * Raft AppendEntries RPC (heartbeat) - MANTIDO PARA COMPATIBILIDADE
-     * Agora usado apenas como heartbeat simples do Bully
+     * Bully: Heartbeat - líder envia periodicamente para indicar que está vivo
      */
     @WebMethod
     @Override
-    public boolean appendEntries(int termo, int liderId, int prevLogIndex, int prevLogTerm, 
-                                 String[] entries, int leaderCommit) {
+    public void heartbeat(int liderId) {
         synchronized (this) {
-            // Bully: atualiza líder e heartbeat
             if (liderId != id) {
-                int liderAnterior = this.id_lider;
                 boolean estavaEmEleicao = (this.estado == Estado.ELECTION);
+                boolean primeiroHeartbeat = (this.id_lider == -1);
                 
                 this.id_lider = liderId;
                 this.estado = Estado.NORMAL;
                 this.ultimoHeartbeat = System.currentTimeMillis();
                 
-                // Tenta descobrir e adicionar o coordenador à lista se ainda não estiver
-                descobrirEAdicionarFilial(liderId);
-                
-                if (liderAnterior != liderId && liderAnterior != -1) {
-                    System.out.println("Filial " + id + ": Recebeu heartbeat de coordenador " + liderId + 
-                                     " (anterior: " + liderAnterior + ")");
-                } else if (liderAnterior == -1 && liderId != -1) {
-                    System.out.println("Filial " + id + ": Recebeu heartbeat de coordenador " + liderId);
-                } else if (liderAnterior == liderId) {
-                    // Mesmo coordenador - heartbeat periódico (não loga para evitar spam, mas atualiza heartbeat)
-                    // Log apenas ocasionalmente para debug
-                    if (System.currentTimeMillis() % 5000 < 100) {
-                        System.out.println("Filial " + id + ": Recebeu heartbeat periódico de coordenador " + liderId);
-                    }
-                }
-                
-                // Se estava em eleição, para a eleição
                 if (estavaEmEleicao) {
                     System.out.println("Filial " + id + ": Recebeu heartbeat durante eleição. Parando eleição.");
                 }
+                
+                // Na primeira vez que recebe heartbeat, se registra com o líder
+                if (!registradoComLider && primeiroHeartbeat) {
+                    new Thread(() -> registrarComLider(liderId)).start();
+                }
+            }
+        }
+    }
+    
+    /**
+     * Se registra com o líder e obtém lista de filiais ativas
+     */
+    private void registrarComLider(int liderId) {
+        try {
+            // Encontra o líder
+            Filial lider = conectarFilial(liderId);
+            if (lider == null) {
+                System.out.println("Filial " + id + ": Não conseguiu conectar ao líder para registro");
+                return;
             }
             
-            return true;
+            // Se registra com o líder
+            lider.registrarFilial(my_url, id);
+            System.out.println("Filial " + id + ": Registrada com o líder " + liderId);
+            
+            // Obtém lista de filiais do líder
+            String[] urls = lider.getUrlsFiliais();
+            if (urls != null && urls.length > 0) {
+                System.out.println("Filial " + id + ": Recebeu lista de " + urls.length + " filial(is) do líder");
+                for (String url : urls) {
+                    if (!url.equals(my_url)) {
+                        try {
+                            Filial filial = conectarFilialPorUrl(url);
+                            if (filial != null) {
+                                adicionarFilial(filial, url);
+                            }
+                        } catch (Exception e) {
+                            // Filial pode estar offline, ignora
+                        }
+                    }
+                }
+            }
+            
+            registradoComLider = true;
+        } catch (Exception e) {
+            System.out.println("Filial " + id + ": Erro ao registrar com líder: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Conecta a uma filial pelo ID (procura nas URLs conhecidas)
+     */
+    private Filial conectarFilial(int filialId) {
+        String[] urlsConhecidas = {
+            "http://127.0.0.1:9876/filial",
+            "http://127.0.0.1:9875/filial",
+            "http://127.0.0.1:9874/filial"
+        };
+        
+        for (String url : urlsConhecidas) {
+            try {
+                Filial filial = conectarFilialPorUrl(url);
+                if (filial != null && filial.getId() == filialId) {
+                    return filial;
+                }
+            } catch (Exception e) {
+                // Continua tentando
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Conecta a uma filial por URL
+     */
+    private Filial conectarFilialPorUrl(String url) {
+        try {
+            URL wsdl = new URL(url + "?wsdl");
+            QName qname = new QName("http://implementacoes/", "FilialImplService");
+            Service service = Service.create(wsdl, qname);
+            return service.getPort(Filial.class);
+        } catch (Exception e) {
+            return null;
         }
     }
     
@@ -920,11 +1066,7 @@ public class FilialImpl implements Filial {
                 // É a própria filial líder - processa diretamente
                 System.out.println("Filial " + id + " (LÍDER): Processando " + produtosFilial.size() + 
                                  " produtos na própria filial (LÍDER)");
-                boolean sucesso = processarProdutosEspecificos(
-                    produtosFilial.toArray(new String[0]), 
-                    0, // Bully não usa termos
-                    id
-                );
+                boolean sucesso = processarProdutosEspecificos(produtosFilial.toArray(new String[0]), id);
                 if (sucesso) {
                     System.out.println("Filial " + id + " (LÍDER): ✓ Própria filial processou com sucesso");
                 } else {
@@ -939,11 +1081,7 @@ public class FilialImpl implements Filial {
                         if (filial.getId() == filialId) {
                             System.out.println("Filial " + id + " (LÍDER): Processando " + produtosFilial.size() + 
                                              " produtos na filial " + filialId);
-                            boolean sucesso = filial.processarProdutosEspecificos(
-                                produtosFilial.toArray(new String[0]), 
-                                0, // Bully não usa termos
-                                id
-                            );
+                            boolean sucesso = filial.processarProdutosEspecificos(produtosFilial.toArray(new String[0]), id);
                             if (sucesso) {
                                 System.out.println("Filial " + id + " (LÍDER): ✓ Filial " + filialId + " processou com sucesso");
                             } else {
@@ -1038,8 +1176,8 @@ public class FilialImpl implements Filial {
      */
     @WebMethod
     @Override
-    public boolean processarProdutosEspecificos(String[] produtos, int termo, int liderId) {
-        // Bully: verifica apenas se o líder é válido (não usa termos)
+    public boolean processarProdutosEspecificos(String[] produtos, int liderId) {
+        // Verifica se o líder é válido
         if (this.id_lider != -1 && this.id_lider != liderId) {
             System.err.println("Filial " + id + ": Rejeitou pedido - líder inválido (esperado: " + this.id_lider + ", recebido: " + liderId + ")");
             return false;
@@ -1075,5 +1213,52 @@ public class FilialImpl implements Filial {
         
         System.out.println("✓ Filial " + id + " processou " + produtos.length + " produto(s): " + Arrays.toString(produtos) + "\n");
         return true;
+    }
+    
+    /**
+     * Retorna URLs das filiais conhecidas (chamado por outras filiais)
+     */
+    @WebMethod
+    @Override
+    public String[] getUrlsFiliais() {
+        lockFiliais.lock();
+        try {
+            // Inclui a própria URL na lista
+            List<String> todas = new ArrayList<>();
+            todas.add(my_url);
+            todas.addAll(urlsFiliais);
+            return todas.toArray(new String[0]);
+        } finally {
+            lockFiliais.unlock();
+        }
+    }
+    
+    /**
+     * Registra uma nova filial (chamado quando filial se anuncia ao líder)
+     */
+    @WebMethod
+    @Override
+    public void registrarFilial(String url, int filialId) {
+        if (estado != Estado.COORDINATOR) {
+            return; // Só o líder registra filiais
+        }
+        
+        lockFiliais.lock();
+        try {
+            if (!urlsFiliais.contains(url) && !url.equals(my_url)) {
+                try {
+                    Filial filial = conectarFilialPorUrl(url);
+                    if (filial != null) {
+                        todasFiliais.add(filial);
+                        urlsFiliais.add(url);
+                        System.out.println("Filial " + id + " (LÍDER): Registrou nova filial " + filialId + " (URL: " + url + ")");
+                    }
+                } catch (Exception e) {
+                    System.out.println("Filial " + id + " (LÍDER): Erro ao conectar filial " + filialId + ": " + e.getMessage());
+                }
+            }
+        } finally {
+            lockFiliais.unlock();
+        }
     }
 }

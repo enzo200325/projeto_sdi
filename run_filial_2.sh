@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Sobe a filial 2 na porta 9875
+# Sobe a filial na porta 9875
 
 cd "$(dirname "$0")"
 
@@ -12,10 +12,12 @@ fi
 DEPENDENCIES=$(mvn dependency:build-classpath -DincludeScope=runtime 2>&1 | grep -v "^\[" | grep -v "WARNING" | grep -v "INFO" | tail -1)
 CLASSPATH="target/classes:${DEPENDENCIES}"
 
-echo "Iniciando Filial 2 (porta 9875)..."
-java -cp "$CLASSPATH" servers.FilialServidorPublisher 9875
+SEED_PORT=$1
 
-
-
-
-
+if [ -z "$SEED_PORT" ]; then
+  echo "Iniciando Filial (porta 9875) - Sem seed..."
+  java -cp "$CLASSPATH" servers.FilialServidorPublisher 9875
+else
+  echo "Iniciando Filial (porta 9875) - Seed: porta $SEED_PORT"
+  java -cp "$CLASSPATH" servers.FilialServidorPublisher 9875 "http://127.0.0.1:${SEED_PORT}/filial"
+fi

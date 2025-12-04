@@ -12,11 +12,9 @@ public interface Filial {
     @WebMethod
     public int getId();
     
-    // Raft: Estado e liderança
+    // Bully: Estado e liderança
     @WebMethod
     public int getLider();
-    @WebMethod
-    public int getTermo();
     @WebMethod
     public String getEstado(); // "FOLLOWER", "CANDIDATE", "LEADER"
     
@@ -26,13 +24,17 @@ public interface Filial {
     @WebMethod
     public void coordinator(int coordenadorId); // Recebe notificação de novo coordenador
     
-    // Raft: RequestVote RPC (para eleição) - MANTIDO PARA COMPATIBILIDADE
+    // Bully: Heartbeat (líder envia periodicamente para seguidores)
     @WebMethod
-    public boolean requestVote(int termo, int candidatoId, int lastLogIndex, int lastLogTerm);
+    public void heartbeat(int liderId);
     
-    // Raft: AppendEntries RPC (heartbeat e coordenação) - MANTIDO PARA COMPATIBILIDADE
+    // Descoberta de filiais: líder retorna URLs das filiais ativas
     @WebMethod
-    public boolean appendEntries(int termo, int liderId, int prevLogIndex, int prevLogTerm, String[] entries, int leaderCommit);
+    public String[] getUrlsFiliais();
+    
+    // Registro: nova filial se registra com o líder
+    @WebMethod
+    public void registrarFilial(String url, int filialId);
     
     // Método público para o restaurante fazer pedidos (via líder)
     @WebMethod
@@ -56,5 +58,5 @@ public interface Filial {
     
     // Consenso: processa apenas os produtos específicos fornecidos
     @WebMethod
-    public boolean processarProdutosEspecificos(String[] produtos, int termo, int liderId);
+    public boolean processarProdutosEspecificos(String[] produtos, int liderId);
 }

@@ -1,12 +1,15 @@
 #!/bin/bash
 
-# Script de atalho para mostrar como subir as filiais individualmente
-
-cd "$(dirname "$0")"
-
-echo "Use os scripts individuais para subir cada filial em um processo separado:"
-echo "  Terminal 1: ./run_filial_1.sh  # porta 9876"
-echo "  Terminal 2: ./run_filial_2.sh  # porta 9875"
-echo "  Terminal 3: ./run_filial_3.sh  # porta 9874"
-
-
+echo "=== Sistema de Filiais com Seed ==="
+echo ""
+echo "Uso: ./run_filial_N.sh [porta_seed]"
+echo ""
+echo "Exemplos:"
+echo ""
+echo "  # Primeira filial (sem seed - se torna líder):"
+echo "  ./run_filial_1.sh"
+echo ""
+echo "  # Filiais seguintes (conectam ao seed na porta 9876):"
+echo "  ./run_filial_2.sh 9876"
+echo "  ./run_filial_3.sh 9876"
+echo ""
